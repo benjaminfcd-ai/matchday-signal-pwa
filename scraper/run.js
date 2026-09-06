@@ -5,17 +5,12 @@ import { fetchWincomparatorPrediction } from "./lib/predictions/wincomparator.js
 import { fetchForebetPrediction, FOREBET_UNAVAILABLE_NOTE } from "./lib/predictions/forebet.js";
 import { computeAgreement } from "./lib/agreement.js";
 
-// Which pass this run is: set by the GitHub Actions workflow that calls it.
-//   friday   — ~5h before the weekend's first kickoff: populate the new round
-//   saturday — ~5h before Saturday's first kickoff: finalize Friday, research Saturday
-//   sunday   — ~5h before Sunday's first kickoff: finalize Saturday, research Sunday
-//   wrap     — after the last Sunday kickoff: finalize Sunday, archive if complete
 const PASS = process.env.PASS;
 if (!["friday", "saturday", "sunday", "wrap"].includes(PASS)) {
   throw new Error(`PASS env var must be one of friday|saturday|sunday|wrap, got: ${PASS}`);
 }
 
-const HARD_RULE_NEVER_FABRICATE = true; // documentation flag — see README "hard rules"
+const HARD_RULE_NEVER_FABRICATE = true;
 
 function nowIct() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
@@ -98,6 +93,12 @@ async function main() {
   if (readErr) throw readErr;
 
   const seasonFixtures = await fetchSeasonFixtures();
+  console.log(
+    `Fetched ${seasonFixtures.length} season fixture(s) total.` +
+      (seasonFixtures.length
+        ? ` First: ${seasonFixtures[0].kickoffLocal} (${seasonFixtures[0].home} vs ${seasonFixtures[0].home === seasonFixtures[0].away ? "" : seasonFixtures[0].away}). Last: ${seasonFixtures[seasonFixtures.length - 1].kickoffLocal}.`
+        : "")
+  );
 
   if (PASS === "friday") {
     const allPast = currentRows.length > 0 && currentRows.every((r) => new Date(r.kickoff_local) < new Date());
@@ -114,12 +115,13 @@ async function main() {
       }
 
       const { start, end } = weekendWindow(nowIct());
+      console.log(`Weekend window: ${start.toISOString()} to ${end.toISOString()}`);
       const weekendFixtures = seasonFixtures.filter((f) => {
         const t = new Date(f.kickoffLocal).getTime();
         return t >= start.getTime() && t < end.getTime();
       });
       if (weekendFixtures.length === 0) {
-        console.warn("No fixtures found for this weekend — check TheSportsDB season data / league ID.");
+        console.warn("No fixtures found in that window — see the fixture count/dates logged above.");
       }
 
       const fridayFixtures = weekendFixtures.filter((f) => new Date(f.kickoffLocal).getUTCDay() === 5);
@@ -149,7 +151,7 @@ async function main() {
   if (PASS === "saturday" || PASS === "sunday") {
     await finalizeFinishedFixtures(currentRows, seasonFixtures);
 
-    const targetDay = PASS === "saturday" ? 6 : 0; // JS getUTCDay: Sat=6, Sun=0
+    const targetDay = PASS === "saturday" ? 6 : 0;
     const { data: freshRows } = await supabaseAdmin.from("matches").select("*");
     const toResearch = (freshRows || []).filter(
       (r) => r.status === "upcoming" && new Date(r.kickoff_local).getUTCDay() === targetDay && (!r.probs || r.probs.length === 0)
