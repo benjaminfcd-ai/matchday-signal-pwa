@@ -1,0 +1,28 @@
+name: Matchday Signal – Saturday update
+
+on:
+  schedule:
+    - cron: "30 6 * * 6" # 13:30 ICT Saturday
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install scraper dependencies
+        working-directory: scraper
+        run: npm install
+      - name: Install headless browser
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+      - name: Run Saturday pass
+        working-directory: scraper
+        env:
+          PASS: saturday
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node run.js

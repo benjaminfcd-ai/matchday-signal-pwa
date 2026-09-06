@@ -1,0 +1,28 @@
+name: Matchday Signal – Weekend wrap & archive
+
+on:
+  schedule:
+    - cron: "30 18 * * 0" # 01:30 ICT Monday (after the last Sunday kickoff)
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install scraper dependencies
+        working-directory: scraper
+        run: npm install
+      - name: Install headless browser
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+      - name: Run weekend wrap pass
+        working-directory: scraper
+        env:
+          PASS: wrap
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node run.js
