@@ -31,13 +31,16 @@ const FLAT_ALIASES = Object.entries(TEAM_ALIASES).flatMap(([canonical, names]) =
   names.map((n) => [n.toLowerCase(), canonical])
 );
 
-// Resolve any spelling/short-name of a club to its canonical name, or return
-// the input unchanged if unrecognized (better to keep an unrecognized name
-// visible than silently drop the fixture).
 export function canonicalTeam(name) {
   if (!name) return name;
-  const hit = FLAT_ALIASES.find(([alias]) => alias === name.trim().toLowerCase());
-  return hit ? hit[1] : name.trim();
+  // football-data.org names include the club suffix, e.g. "Arsenal FC",
+  // "AFC Bournemouth" — strip that before matching against our aliases.
+  const stripped = name.trim().replace(/^AFC\s+/i, "").replace(/\s+F\.?C\.?$/i, "").trim();
+  const lower = stripped.toLowerCase();
+  const exact = FLAT_ALIASES.find(([alias]) => alias === lower);
+  if (exact) return exact[1];
+  const partial = FLAT_ALIASES.find(([alias]) => lower.includes(alias) || alias.includes(lower));
+  return partial ? partial[1] : stripped;
 }
 
 export function slugify(home, away) {

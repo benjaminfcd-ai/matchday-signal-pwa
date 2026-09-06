@@ -1,23 +1,20 @@
 import { canonicalTeam, slugify } from "./teams.js";
 
-// TheSportsDB's free, keyless-signup tier (public test key "3") — reliable
-// structured fixture/score data, so the app's core schedule never depends
-// on scraping a page that might change its layout.
-const PL_LEAGUE_ID = 4328; // English Premier League on TheSportsDB
-const API_BASE = "https://www.thesportsdb.com/api/v1/json/3";
+// football-data.org's free tier (requires a free API token — see README) —
+// reliable structured fixture/score data, so the app's core schedule never
+// depends on scraping a page that might change its layout.
+//
+// NOTE: this project originally used TheSportsDB's shared public "test" key
+// ("3"). That key turned out to only ever return a handful of demo/sample
+// events per league — not the real current-season schedule — so it silently
+// produced "no fixtures found" for real weeks. football-data.org's free tier
+// requires a one-time signup but actually returns the real data.
+const API_BASE = "https://api.football-data.org/v4";
+const COMPETITION = "PL"; // English Premier League
 
-function currentSeasonString(nowUtc) {
-  const y = nowUtc.getUTCFullYear();
-  const m = nowUtc.getUTCMonth() + 1; // 1-12
-  // PL season starts in August; before that, we're still in the previous season
-  return m >= 7 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
-}
-
-function toIctIso(timestampUtcIso) {
-  // timestampUtcIso is like "2026-09-05T19:00:00" (UTC, no offset marker)
-  // or occasionally includes a Z. Normalize, then shift by +7h for ICT.
-  const clean = timestampUtcIso.endsWith("Z") ? timestampUtcIso : timestampUtcIso + "Z";
-  const utcMs = new Date(clean).getTime();
+function toIctIso(utcDateIso) {
+  // utcDateIso is an ISO string with a Z, e.g. "2026-09-05T19:00:00Z".
+  const utcMs = new Date(utcDateIso).getTime();
   const ictMs = utcMs + 7 * 60 * 60 * 1000;
   const d = new Date(ictMs);
   const pad = (n) => String(n).padStart(2, "0");
@@ -27,51 +24,48 @@ function toIctIso(timestampUtcIso) {
   );
 }
 
-/**
- * Fetch every EPL fixture for the current season from TheSportsDB, mapped
- * into this project's match shape (minus predictions, which come from
- * separate scrapers). Returns ALL fixtures for the season — callers filter
- * down to the weekend window they care about.
- */
 export async function fetchSeasonFixtures() {
-  const season = currentSeasonString(new Date());
-  const url = `${API_BASE}/eventsseason.php?id=${PL_LEAGUE_ID}&s=${season}`;
-  const res = await fetch(url, { headers: { "User-Agent": "matchday-signal-scraper/1.0" } });
-  if (!res.ok) throw new Error(`TheSportsDB fixtures request failed: ${res.status}`);
+  const token = process.env.FOOTBALL_DATA_TOKEN;
+  if (!token) {
+    throw new Error(
+      "FOOTBALL_DATA_TOKEN must be set (as a GitHub Actions secret) — sign up free at football-data.org/client/register"
+    );
+  }
+  const url = `${API_BASE}/competitions/${COMPETITION}/matches`;
+  const res = await fetch(url, { headers: { "X-Auth-Token": token } });
+  if (!res.ok) throw new Error(`football-data.org fixtures request failed: ${res.status}`);
   const data = await res.json();
-  const events = data.events || [];
+  const matches = data.matches || [];
 
-  return events
-    .filter((e) => e.strTimestamp) // skip fixtures with no confirmed kickoff yet
-    .map((e) => {
-      const home = canonicalTeam(e.strHomeTeam);
-      const away = canonicalTeam(e.strAwayTeam);
-      const finished = e.strStatus === "FT" || e.strStatus === "AET" || e.strStatus === "FT_PEN";
+  return matches
+    .filter((m) => m.utcDate)
+    .map((m) => {
+      const home = canonicalTeam(m.homeTeam?.name || m.homeTeam?.shortName || "");
+      const away = canonicalTeam(m.awayTeam?.name || m.awayTeam?.shortName || "");
+      const finished = m.status === "FINISHED";
+      const homeScore = m.score?.fullTime?.home;
+      const awayScore = m.score?.fullTime?.away;
+      const dateTag = m.utcDate.slice(0, 10).replace(/-/g, "").slice(2);
       return {
-        id: slugify(home, away) + "-" + (e.dateEvent || "").replace(/-/g, "").slice(2),
+        id: slugify(home, away) + "-" + dateTag,
         home,
         away,
-        kickoffLocal: toIctIso(e.strTimestamp),
+        kickoffLocal: toIctIso(m.utcDate),
         status: finished ? "finished" : "upcoming",
-        score: finished && e.intHomeScore != null && e.intAwayScore != null
-          ? `${e.intHomeScore}–${e.intAwayScore}`
+        score: finished && homeScore != null && awayScore != null
+          ? `${homeScore}–${awayScore}`
           : null,
       };
     });
 }
 
-/**
- * Given a reference "now" (ICT), return the Fri/Sat/Sun window that contains
- * (or immediately follows) it — i.e. "this weekend's" matchweek.
- */
 export function weekendWindow(nowIct = new Date()) {
-  const day = nowIct.getUTCDay(); // 0 Sun .. 6 Sat, using UTC fields on an ICT-shifted date is fine here
-  // Find the most recent Friday on/before "now" (0 = this Fri..Sun window)
+  const day = nowIct.getUTCDay();
   const daysSinceFriday = (day - 5 + 7) % 7;
   const friday = new Date(nowIct);
   friday.setUTCDate(friday.getUTCDate() - daysSinceFriday);
   friday.setUTCHours(0, 0, 0, 0);
   const mondayAfter = new Date(friday);
-  mondayAfter.setUTCDate(friday.getUTCDate() + 3); // through end of Sunday
+  mondayAfter.setUTCDate(friday.getUTCDate() + 3);
   return { start: friday, end: mondayAfter };
 }
