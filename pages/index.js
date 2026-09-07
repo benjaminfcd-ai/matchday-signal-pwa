@@ -4,6 +4,24 @@ import { supabase } from "../lib/supabaseClient";
 import { computeRoundAccuracy } from "../lib/results";
 
 const TZ = "Asia/Ho_Chi_Minh";
+archived.map((r) => {
+  const { correct, graded } = computeRoundAccuracy(r.matches || []);
+  const pct = graded ? Math.round((correct / graded) * 100) : null;
+  const hideBadge = HIDE_ACCURACY_FOR_ROUNDS.has(r.round_label);
+  return (
+    <div className="archived-round" key={r.id}>
+      <div>
+        <div className="rtitle">{r.round_label}</div>
+        <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
+      </div>
+      {pct != null && !hideBadge ? (
+        <span className={`accuracy-chip ${pct > 50 ? "good" : "bad"}`}>{correct}/{graded} correct — {pct}%</span>
+      ) : (
+        <span className="accuracy-chip none">Not enough graded picks</span>
+      )}
+    </div>
+  );
+})
 const AGREE_LABEL = { good: "Models agree", warn: "Models lean, not sure", bad: "Models conflict", split: "Split, tight" };
 
 function fmtTime(iso) {
