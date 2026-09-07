@@ -2,15 +2,22 @@ import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 import { fetchSeasonFixtures, weekendWindow } from "./lib/fixtures.js";
 import { fetchOptaPrediction } from "./lib/predictions/opta.js";
 import { fetchWincomparatorPrediction } from "./lib/predictions/wincomparator.js";
-import { fetchForebetPrediction, FOREBET_UNAVAILABLE_NOTE } from "./lib/predictions/forebet.js";
+import { fetchSoccervistaPrediction } from "./lib/predictions/soccervista.js";
+import { fetchEloPrediction } from "./lib/predictions/elo.js";
+import { computeTeamGoalStats, fetchGoalsPrediction } from "./lib/predictions/goalsModel.js";
 import { computeAgreement } from "./lib/agreement.js";
 
+// Which pass this run is: set by the GitHub Actions workflow that calls it.
+//   friday   — ~5h before the weekend's first kickoff: populate the new round
+//   saturday — ~5h before Saturday's first kickoff: finalize Friday, research Saturday
+//   sunday   — ~5h before Sunday's first kickoff: finalize Saturday, research Sunday
+//   wrap     — after the last Sunday kickoff: finalize Sunday, archive if complete
 const PASS = process.env.PASS;
 if (!["friday", "saturday", "sunday", "wrap"].includes(PASS)) {
   throw new Error(`PASS env var must be one of friday|saturday|sunday|wrap, got: ${PASS}`);
 }
 
-const HARD_RULE_NEVER_FABRICATE = true;
+const HARD_RULE_NEVER_FABRICATE = true; // documentation flag — see README "hard rules"
 
 function nowIct() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
@@ -20,13 +27,24 @@ function dayOfIct(iso) {
   return new Date(iso).toISOString().slice(0, 10);
 }
 
-async function researchFixture(f) {
-  const [opta, win, forebet] = await Promise.all([
+async function researchFixture(f, teamStrengths) {
+  const [opta, win, soccervista, elo] = await Promise.all([
     fetchOptaPrediction(f.home, f.away),
     fetchWincomparatorPrediction(f.home, f.away),
-    fetchForebetPrediction(f.home, f.away),
+    fetchSoccervistaPrediction(f.home, f.away),
+    fetchEloPrediction(f.home, f.away),
   ]);
-  const probs = [opta, win, forebet].filter(Boolean);
+  // Not a network fetch — computed from this season's real results, which
+  // were already fetched once for the whole run (see main()).
+  const goals = fetchGoalsPrediction(f.home, f.away, teamStrengths);
+
+  // Opta/Wincomparator/Elo/SoccerVista all contribute a 1X2 reading when
+  // available (used for the win/draw/away agreement calculation). Over/
+  // Under, Correct Score and Handicap come from the goals model (real
+  // scoring data — see goalsModel.js for why that's more accurate here than
+  // Elo alone) plus SoccerVista's own published picks, merged into "extras".
+  const probs = [opta, win, soccervista?.prob, elo?.prob].filter(Boolean);
+  const extras = [...(goals?.extras || []), ...(soccervista?.extras || [])];
   const { agreement, agreementNote, standout } = computeAgreement(probs, f.home, f.away);
 
   return {
@@ -37,11 +55,11 @@ async function researchFixture(f) {
     status: "upcoming",
     score: null,
     probs,
-    extras: [],
+    extras,
     standout,
     agreement,
     agreement_note: agreementNote,
-    forebet_note: forebet ? null : FOREBET_UNAVAILABLE_NOTE,
+    forebet_note: null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -100,6 +118,12 @@ async function main() {
         : "")
   );
 
+  const teamStrengths = computeTeamGoalStats(seasonFixtures);
+  console.log(
+    `Goals model: computed scoring strength for ${teamStrengths.teamsWithData} team(s) ` +
+      `(league avg ${teamStrengths.leagueAvgGoals.toFixed(2)} goals/team/game so far).`
+  );
+
   if (PASS === "friday") {
     const allPast = currentRows.length > 0 && currentRows.every((r) => new Date(r.kickoff_local) < new Date());
     if (currentRows.length === 0 || allPast) {
@@ -127,7 +151,7 @@ async function main() {
       const fridayFixtures = weekendFixtures.filter((f) => new Date(f.kickoffLocal).getUTCDay() === 5);
       const laterFixtures = weekendFixtures.filter((f) => new Date(f.kickoffLocal).getUTCDay() !== 5);
 
-      const researched = await Promise.all(fridayFixtures.map(researchFixture));
+      const researched = await Promise.all(fridayFixtures.map((f) => researchFixture(f, teamStrengths)));
       const placeholders = laterFixtures.map(placeholderFixture);
       const rows = [...researched, ...placeholders];
       if (rows.length) {
@@ -151,13 +175,15 @@ async function main() {
   if (PASS === "saturday" || PASS === "sunday") {
     await finalizeFinishedFixtures(currentRows, seasonFixtures);
 
-    const targetDay = PASS === "saturday" ? 6 : 0;
+    const targetDay = PASS === "saturday" ? 6 : 0; // JS getUTCDay: Sat=6, Sun=0
     const { data: freshRows } = await supabaseAdmin.from("matches").select("*");
     const toResearch = (freshRows || []).filter(
       (r) => r.status === "upcoming" && new Date(r.kickoff_local).getUTCDay() === targetDay && (!r.probs || r.probs.length === 0)
     );
     const researched = await Promise.all(
-      toResearch.map((r) => researchFixture({ id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local }))
+      toResearch.map((r) =>
+        researchFixture({ id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local }, teamStrengths)
+      )
     );
     if (researched.length) {
       const { error } = await supabaseAdmin.from("matches").upsert(researched);
