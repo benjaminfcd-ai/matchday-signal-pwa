@@ -152,6 +152,15 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 
 .section-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); margin: 26px 0 10px; font-weight: 700; }
 
+.day-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 14px; }
+.day-tab {
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-muted);
+}
+.day-tab:hover { background: var(--surface-2); color: var(--text); }
+.day-tab.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
 .matches { display: flex; flex-direction: column; gap: 10px; }
 
 .match { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
