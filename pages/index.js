@@ -4,24 +4,14 @@ import { supabase } from "../lib/supabaseClient";
 import { computeRoundAccuracy } from "../lib/results";
 
 const TZ = "Asia/Ho_Chi_Minh";
-archived.map((r) => {
-  const { correct, graded } = computeRoundAccuracy(r.matches || []);
-  const pct = graded ? Math.round((correct / graded) * 100) : null;
-  const hideBadge = HIDE_ACCURACY_FOR_ROUNDS.has(r.round_label);
-  return (
-    <div className="archived-round" key={r.id}>
-      <div>
-        <div className="rtitle">{r.round_label}</div>
-        <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
-      </div>
-      {pct != null && !hideBadge ? (
-        <span className={`accuracy-chip ${pct > 50 ? "good" : "bad"}`}>{correct}/{graded} correct — {pct}%</span>
-      ) : (
-        <span className="accuracy-chip none">Not enough graded picks</span>
-      )}
-    </div>
-  );
-})
+
+// This one round only had 3 of its 10 fixtures actually researched before a
+// since-fixed scraper bug (see scraper/run.js) — a 3-game sample makes the
+// accuracy badge (0/3 — 0%) more misleading than informative. Rather than a
+// general small-sample rule, this just suppresses the badge for this one
+// archived round by its label; the real graded count stays visible, nothing
+// is invented. Safe to delete once this round ages out of "Past rounds".
+const HIDE_ACCURACY_FOR_ROUNDS = new Set(["Premier League · 2026-09-04 – 2026-09-06"]);
 const AGREE_LABEL = { good: "Models agree", warn: "Models lean, not sure", bad: "Models conflict", split: "Split, tight" };
 
 function fmtTime(iso) {
@@ -285,17 +275,18 @@ export default function Home() {
                   <div className="sub">Archived once a round is fully played and a new one is analyzed</div>
                 </div>
               </div>
-                         {archived.length ? (
+              {archived.length ? (
                 archived.map((r) => {
                   const { correct, graded } = computeRoundAccuracy(r.matches || []);
                   const pct = graded ? Math.round((correct / graded) * 100) : null;
+                  const hideBadge = HIDE_ACCURACY_FOR_ROUNDS.has(r.round_label);
                   return (
                     <div className="archived-round" key={r.id}>
                       <div>
                         <div className="rtitle">{r.round_label}</div>
                         <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
                       </div>
-                      {pct != null ? (
+                      {pct != null && !hideBadge ? (
                         <span className={`accuracy-chip ${pct > 50 ? "good" : "bad"}`}>{correct}/{graded} correct — {pct}%</span>
                       ) : (
                         <span className="accuracy-chip none">Not enough graded picks</span>
