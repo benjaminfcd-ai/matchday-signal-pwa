@@ -24,6 +24,12 @@ function toIctIso(utcDateIso) {
   );
 }
 
+/**
+ * Fetch every EPL fixture for the current season from football-data.org,
+ * mapped into this project's match shape (minus predictions, which come
+ * from separate scrapers). Returns ALL fixtures for the season — callers
+ * filter down to the weekend window they care about.
+ */
 export async function fetchSeasonFixtures() {
   const token = process.env.FOOTBALL_DATA_TOKEN;
   if (!token) {
@@ -59,13 +65,31 @@ export async function fetchSeasonFixtures() {
     });
 }
 
+/**
+ * Given a reference "now" (ICT), return the Fri/Sat/Sun window that contains
+ * it, or — if that window has already fully elapsed — the NEXT upcoming
+ * Fri/Sat/Sun window. This matters whenever the Friday pass gets triggered
+ * (by schedule or manually) after a previous weekend has already finished
+ * and been archived: it should start the new round on the coming weekend,
+ * not regenerate the one that just ended.
+ */
 export function weekendWindow(nowIct = new Date()) {
-  const day = nowIct.getUTCDay();
+  const day = nowIct.getUTCDay(); // 0 Sun .. 6 Sat, using UTC fields on an ICT-shifted date is fine here
+  // Find the most recent Friday on/before "now" (0 = this Fri..Sun window)
   const daysSinceFriday = (day - 5 + 7) % 7;
   const friday = new Date(nowIct);
   friday.setUTCDate(friday.getUTCDate() - daysSinceFriday);
   friday.setUTCHours(0, 0, 0, 0);
-  const mondayAfter = new Date(friday);
-  mondayAfter.setUTCDate(friday.getUTCDate() + 3);
+  let mondayAfter = new Date(friday);
+  mondayAfter.setUTCDate(friday.getUTCDate() + 3); // through end of Sunday
+
+  // If that window already fully ended (we're on the Monday-Thursday after
+  // it), roll forward one week to the next Friday-Sunday window instead.
+  if (mondayAfter.getTime() <= nowIct.getTime()) {
+    friday.setUTCDate(friday.getUTCDate() + 7);
+    mondayAfter = new Date(friday);
+    mondayAfter.setUTCDate(friday.getUTCDate() + 3);
+  }
+
   return { start: friday, end: mondayAfter };
 }
