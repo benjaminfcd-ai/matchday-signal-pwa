@@ -5,6 +5,7 @@ import { fetchWincomparatorPrediction } from "./lib/predictions/wincomparator.js
 import { fetchSoccervistaPrediction } from "./lib/predictions/soccervista.js";
 import { fetchEloPrediction } from "./lib/predictions/elo.js";
 import { computeTeamGoalStats, fetchGoalsPrediction } from "./lib/predictions/goalsModel.js";
+import { fetchXgContext } from "./lib/xg.js";
 import { computeAgreement } from "./lib/agreement.js";
 
 // Which pass this run is: set by the GitHub Actions workflow that calls it.
@@ -118,10 +119,17 @@ async function main() {
         : "")
   );
 
-  const teamStrengths = computeTeamGoalStats(seasonFixtures);
+  const xgContext = await fetchXgContext();
+  const xgTeamsCurrent = xgContext.current ? Object.keys(xgContext.current).length : 0;
+  const xgTeamsPrevious = xgContext.previous ? Object.keys(xgContext.previous).length : 0;
+
+  const teamStrengths = computeTeamGoalStats(seasonFixtures, xgContext);
   console.log(
     `Goals model: computed scoring strength for ${teamStrengths.teamsWithData} team(s) ` +
-      `(league avg ${teamStrengths.leagueAvgGoals.toFixed(2)} goals/team/game so far).`
+      `(league avg ${teamStrengths.leagueAvgGoals.toFixed(2)} goals/team/game so far). ` +
+      `xG context: ${xgTeamsCurrent} team(s) with current-season Understat data, ` +
+      `${xgTeamsPrevious} with last-season data for the early-season prior.` +
+      (xgTeamsCurrent === 0 ? " (Understat unreachable or unparsed this run — falling back to goals-only, as designed.)" : "")
   );
 
   if (PASS === "friday") {
