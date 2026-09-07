@@ -1,0 +1,33 @@
+name: Matchday Signal – research (every 3h)
+
+# One recurring job instead of separate Friday/Saturday/Sunday/wrap passes —
+# see scraper/run.js for why. It runs every 3 hours, all week; most runs
+# outside a matchday's pre-kickoff window are a fast no-op (nothing to
+# research yet, nothing to archive). Real kickoff times move week to week,
+# so this checks them directly rather than assuming a fixed clock time.
+on:
+  schedule:
+    - cron: "0 */3 * * *" # every 3 hours (00:00, 03:00, 06:00 UTC, ...)
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install scraper dependencies
+        working-directory: scraper
+        run: npm install
+      - name: Install headless browser
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+      - name: Run scraper
+        working-directory: scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+        run: node run.js
