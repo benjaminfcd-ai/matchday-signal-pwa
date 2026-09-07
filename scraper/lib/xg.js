@@ -1,3 +1,4 @@
+import { withPage } from "./browser.js";
 import { canonicalTeam } from "./teams.js";
 
 // Understat (understat.com) publishes match-by-match expected-goals (xG)
@@ -7,20 +8,17 @@ import { canonicalTeam } from "./teams.js";
 // handful of games have been played and goal counts are still noisy (xG
 // converges to a stable read much faster than goals do).
 //
-// Understat has no official public API. The technique used here — reading
-// the `teamsData` variable embedded in the league page's JavaScript — is a
-// long-standing, widely-documented public pattern (used by many open-source
-// Understat scrapers), not a private reverse-engineering effort. This
-// project's development sandbox couldn't reach understat.com directly to
-// verify the page's exact current markup, so the first deployed version of
-// this file failed silently into its safe fallback (0 teams, goals-only) —
-// this version adds specific diagnostic logging (HTTP status, whether
-// "teamsData" was found at all, a snippet of the page if not) so a real
-// GitHub Actions log points at the actual cause instead of just "it didn't
-// work."
+// Understat has no official public API. A first version of this file tried
+// a plain HTTP fetch and read a `teamsData` variable out of the raw HTML —
+// a long-standing, widely-documented public pattern for this site. A real
+// run's log showed that no longer works: the request succeeds (HTTP 200,
+// correct page title) but the response is a small, mostly-empty shell with
+// no `teamsData` in it — Understat's data is now loaded client-side by its
+// own JavaScript after the page loads, the same situation this project
+// already solved for SoccerVista. This version uses the same fix: a real
+// headless browser (already set up for that purpose — see browser.js),
+// which actually runs the page's JS before reading the data.
 const BASE = "https://understat.com/league/EPL";
-const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 function currentSeasonStartYear(now = new Date()) {
   // EPL season runs roughly Aug-May; Understat URLs use the year the
@@ -31,45 +29,50 @@ function currentSeasonStartYear(now = new Date()) {
 }
 
 function decodeEscapedJson(raw) {
-  // Understat embeds its data as `JSON.parse('\x7B...\x7D')` — a string
-  // with every byte hex-escaped. Un-escape it back to real characters,
-  // then parse it as JSON.
+  // Understat's older embedding style: `JSON.parse('\x7B...\x7D')` — a
+  // string with every byte hex-escaped. Un-escape it back to real
+  // characters, then parse it as JSON. Kept as a fallback (see below).
   const unescaped = raw.replace(/\\x([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
   return JSON.parse(unescaped);
 }
 
 async function fetchTeamsData(seasonStartYear) {
   const url = `${BASE}/${seasonStartYear}`;
-  let res;
   try {
-    res = await fetch(url, {
-      headers: {
-        "User-Agent": BROWSER_UA,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
+    return await withPage(async (page) => {
+      await page.goto(url, { waitUntil: "networkidle", timeout: 45000 });
+
+      // Primary path: Understat's page sets `teamsData` as a client-side
+      // global once its own JS runs — read it directly from the rendered
+      // page rather than parsing HTML text.
+      const fromWindow = await page.evaluate(() =>
+        typeof window.teamsData !== "undefined" ? window.teamsData : null
+      );
+      if (fromWindow) return fromWindow;
+
+      // Fallback: in case the data instead arrives as an escaped JSON
+      // string inside a <script> tag (this project's older assumption),
+      // check the fully-rendered HTML for that pattern too before giving
+      // up — cheap to try, and covers a future layout change either way.
+      const html = await page.content();
+      const match = html.match(/var\s+teamsData\s*=\s*JSON\.parse\('(.+?)'\);/);
+      if (!match) {
+        console.warn(
+          `[xg] rendered ${url} in a real browser (${html.length} bytes) but found neither ` +
+            `window.teamsData nor an embedded teamsData script — Understat's page structure may ` +
+            `have changed further; this needs a fresh look at the real page.`
+        );
+        return null;
+      }
+      try {
+        return decodeEscapedJson(match[1]);
+      } catch (err) {
+        console.warn(`[xg] found an embedded teamsData script at ${url} but failed to parse it: ${err.message}`);
+        return null;
+      }
     });
   } catch (err) {
-    console.warn(`[xg] network error fetching ${url}: ${err.message}`);
-    return null;
-  }
-  if (!res.ok) {
-    console.warn(`[xg] ${url} returned HTTP ${res.status}`);
-    return null;
-  }
-  const html = await res.text();
-  const match = html.match(/var\s+teamsData\s*=\s*JSON\.parse\('(.+?)'\);/);
-  if (!match) {
-    console.warn(
-      `[xg] fetched ${url} (${html.length} bytes, HTTP ${res.status}) but couldn't find "teamsData" in it — ` +
-        `page layout may differ from what this was built against. First 200 chars: ` +
-        JSON.stringify(html.slice(0, 200).replace(/\s+/g, " "))
-    );
-    return null;
-  }
-  try {
-    return decodeEscapedJson(match[1]);
-  } catch (err) {
-    console.warn(`[xg] found "teamsData" at ${url} but failed to parse it: ${err.message}`);
+    console.warn(`[xg] browser fetch failed for ${url}: ${err.message}`);
     return null;
   }
 }
