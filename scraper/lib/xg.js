@@ -10,13 +10,17 @@ import { canonicalTeam } from "./teams.js";
 // Understat has no official public API. The technique used here — reading
 // the `teamsData` variable embedded in the league page's JavaScript — is a
 // long-standing, widely-documented public pattern (used by many open-source
-// Understat scrapers), not a private reverse-engineering effort. That said,
-// this project's development sandbox couldn't reach understat.com directly
-// to verify the page's exact current markup, so treat this as best-effort:
-// if it starts failing, a real GitHub Actions log will show "0 team(s)
-// with current-season Understat data" (see run.js), and the fix is to
-// compare Understat's actual page source against the parsing logic below.
+// Understat scrapers), not a private reverse-engineering effort. This
+// project's development sandbox couldn't reach understat.com directly to
+// verify the page's exact current markup, so the first deployed version of
+// this file failed silently into its safe fallback (0 teams, goals-only) —
+// this version adds specific diagnostic logging (HTTP status, whether
+// "teamsData" was found at all, a snippet of the page if not) so a real
+// GitHub Actions log points at the actual cause instead of just "it didn't
+// work."
 const BASE = "https://understat.com/league/EPL";
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 function currentSeasonStartYear(now = new Date()) {
   // EPL season runs roughly Aug-May; Understat URLs use the year the
@@ -36,14 +40,36 @@ function decodeEscapedJson(raw) {
 
 async function fetchTeamsData(seasonStartYear) {
   const url = `${BASE}/${seasonStartYear}`;
-  const res = await fetch(url, { headers: { "User-Agent": "matchday-signal-scraper/1.0" } });
-  if (!res.ok) return null;
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+  } catch (err) {
+    console.warn(`[xg] network error fetching ${url}: ${err.message}`);
+    return null;
+  }
+  if (!res.ok) {
+    console.warn(`[xg] ${url} returned HTTP ${res.status}`);
+    return null;
+  }
   const html = await res.text();
   const match = html.match(/var\s+teamsData\s*=\s*JSON\.parse\('(.+?)'\);/);
-  if (!match) return null;
+  if (!match) {
+    console.warn(
+      `[xg] fetched ${url} (${html.length} bytes, HTTP ${res.status}) but couldn't find "teamsData" in it — ` +
+        `page layout may differ from what this was built against. First 200 chars: ` +
+        JSON.stringify(html.slice(0, 200).replace(/\s+/g, " "))
+    );
+    return null;
+  }
   try {
     return decodeEscapedJson(match[1]);
-  } catch {
+  } catch (err) {
+    console.warn(`[xg] found "teamsData" at ${url} but failed to parse it: ${err.message}`);
     return null;
   }
 }
@@ -80,8 +106,14 @@ function summarizeTeamsData(teamsData) {
 export async function fetchXgContext() {
   const thisYear = currentSeasonStartYear();
   const [current, previous] = await Promise.all([
-    fetchTeamsData(thisYear).catch(() => null),
-    fetchTeamsData(thisYear - 1).catch(() => null),
+    fetchTeamsData(thisYear).catch((err) => {
+      console.warn(`[xg] unexpected error fetching current season (${thisYear}): ${err.message}`);
+      return null;
+    }),
+    fetchTeamsData(thisYear - 1).catch((err) => {
+      console.warn(`[xg] unexpected error fetching previous season (${thisYear - 1}): ${err.message}`);
+      return null;
+    }),
   ]);
   return {
     current: summarizeTeamsData(current),
