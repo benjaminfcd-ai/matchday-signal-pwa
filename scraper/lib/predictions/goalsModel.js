@@ -1,22 +1,25 @@
-// A Poisson goal-expectation model built from each club's ACTUAL goals
-// scored/conceded this season (not a flat league-wide guess) — the standard
-// Maher (1982) multiplicative attack/defense-strength approach that most
-// professional expected-goals models are built on. This is what drives
-// Over/Under, Correct Score, and the goal-based Handicap line; Club Elo
-// (elo.js) is left to do what it's actually suited for — an independent
-// win/draw/loss reading from ratings, not goal totals. Two teams can have
-// the same Elo rating with very different scoring profiles (e.g. a
-// low-event defensive side vs. a high-event attacking one) — Elo alone
-// can't tell Over/Under apart for those two matches, but their actual goals
-// this season can.
+// A Poisson goal-expectation model built primarily from each club's ACTUAL
+// expected goals (xG) this season — a shot-quality-based measure from
+// Understat (see ../xg.js) that's a steadier, faster-converging signal than
+// raw goals scored/conceded, especially with only a handful of games
+// played. When Understat's current-season xG isn't available for a team
+// (site unreachable, or that fixture hasn't been mapped yet), this falls
+// back to real goals scored/conceded from football-data.org instead —
+// never a guess, just a steadier real number.
 //
-// EARLY-SEASON NOTE: with only a couple of games played, a team's raw
-// scoring rate is noisy — conceding 5 goals in 2 games doesn't reliably
-// mean a leaky defense yet. This applies Bayesian shrinkage: each team's
-// rate is blended toward the league average, weighted by PRIOR_GAMES worth
-// of "pseudo-games" of league-average performance, so small samples pull
-// toward the league norm instead of producing wild swings. As more of the
-// season is played, real form increasingly outweighs that prior.
+// EARLY-SEASON PRIOR: with only a couple of games played, ANY per-game
+// rate is noisy — goals or xG. This blends each team's current-season rate
+// toward a PRIOR, weighted by PRIOR_GAMES worth of "pseudo-games" of that
+// prior. The prior itself is smarter than a flat league average: it's that
+// team's own final xG rate from LAST season when Understat has it (a
+// genuinely informative anchor — a team that concedes a lot tends to keep
+// doing so), falling back to the current league-average xG rate only for a
+// newly promoted team with no top-flight history to draw on.
+//
+// This is what drives Over/Under, Correct Score, and the goal-based
+// Handicap line; Club Elo (elo.js) is left to do what it's actually suited
+// for — an independent win/draw/loss reading from ratings, not goal
+// totals.
 const PRIOR_GAMES = 4;
 const HOME_GOAL_BOOST = 1.12; // home teams score somewhat more than a neutral venue would suggest
 const AWAY_GOAL_DAMPEN = 0.94;
@@ -24,9 +27,15 @@ const MAX_GOALS = 8;
 
 // Builds each team's shrunk attack/defense strength (relative to the
 // league-average goals/team/game) from every FINISHED match in the fetched
-// season fixtures — no extra network calls, since run.js already fetches
-// the full season from football-data.org for the schedule itself.
-export function computeTeamGoalStats(seasonFixtures) {
+// season fixtures, blended with Understat's xG context when available.
+// `xgContext` is `{ current, previous }` from xg.js — either can be null
+// (Understat unreachable this run, or a specific team missing from it),
+// in which case that team's strength falls back to real goals only, per
+// the hard "never fabricate" rule.
+export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
+  const xgCurrent = xgContext.current || null;
+  const xgPrevious = xgContext.previous || null;
+
   const byTeam = {};
   const ensure = (t) => (byTeam[t] ||= { gf: 0, ga: 0, gp: 0 });
 
@@ -55,14 +64,43 @@ export function computeTeamGoalStats(seasonFixtures) {
 
   const leagueAvgGoals = totalTeamGames ? totalGoals / totalTeamGames : 1.35; // per team per game, fallback if season just started
 
+  // League-average xG rate (last season), used as the prior only for a
+  // team Understat has no history for (e.g. newly promoted).
+  let leagueAvgXg = leagueAvgGoals;
+  if (xgPrevious) {
+    const withData = Object.values(xgPrevious).filter((t) => t.games > 0);
+    if (withData.length) {
+      leagueAvgXg = withData.reduce((sum, t) => sum + t.xgFor / t.games, 0) / withData.length;
+    }
+  }
+
   const strengths = {};
   for (const [team, s] of Object.entries(byTeam)) {
-    const shrunkAttack = (s.gf + PRIOR_GAMES * leagueAvgGoals) / (s.gp + PRIOR_GAMES);
-    const shrunkDefense = (s.ga + PRIOR_GAMES * leagueAvgGoals) / (s.gp + PRIOR_GAMES);
+    const xgNow = xgCurrent?.[team];
+    const usingXg = !!(xgNow && xgNow.games > 0);
+
+    // This season's rate: prefer Understat's xG (steadier), fall back to
+    // real goals from football-data.org.
+    const gamesForRate = usingXg ? xgNow.games : s.gp;
+    const attackNow = usingXg ? xgNow.xgFor / xgNow.games : s.gp ? s.gf / s.gp : leagueAvgGoals;
+    const defenseNow = usingXg ? xgNow.xgAgainst / xgNow.games : s.gp ? s.ga / s.gp : leagueAvgGoals;
+
+    // Prior: this team's own last-season xG rate when Understat has it,
+    // otherwise the league-average xG rate.
+    const prevTeam = xgPrevious?.[team];
+    const usingPreviousSeasonPrior = !!(prevTeam && prevTeam.games > 0);
+    const priorAttack = usingPreviousSeasonPrior ? prevTeam.xgFor / prevTeam.games : leagueAvgXg;
+    const priorDefense = usingPreviousSeasonPrior ? prevTeam.xgAgainst / prevTeam.games : leagueAvgXg;
+
+    const shrunkAttack = (attackNow * gamesForRate + priorAttack * PRIOR_GAMES) / (gamesForRate + PRIOR_GAMES);
+    const shrunkDefense = (defenseNow * gamesForRate + priorDefense * PRIOR_GAMES) / (gamesForRate + PRIOR_GAMES);
+
     strengths[team] = {
       attack: shrunkAttack / leagueAvgGoals,
       defense: shrunkDefense / leagueAvgGoals,
       gamesPlayed: s.gp,
+      usingXg,
+      usingPreviousSeasonPrior,
     };
   }
 
@@ -108,6 +146,7 @@ export function computeGoalsPrediction(home, away, teamStrengths) {
     handicap: { team: handicapTeam, line: handicapLine },
     expectedGoals: { home: Math.round(homeExp * 10) / 10, away: Math.round(awayExp * 10) / 10 },
     sampleGames: Math.min(h.gamesPlayed, a.gamesPlayed),
+    xgBased: !!(h.usingXg && a.usingXg),
   };
 }
 
@@ -120,7 +159,13 @@ export function fetchGoalsPrediction(home, away, teamStrengths) {
     if (!calc) return null;
 
     const lowSample = calc.sampleGames < 3;
-    const sourceLabel = lowSample ? "Goals model (early-season, low sample)" : "Goals model (calculated)";
+    const sourceLabel = calc.xgBased
+      ? lowSample
+        ? "Goals model (xG-based, early-season)"
+        : "Goals model (xG-based)"
+      : lowSample
+      ? "Goals model (early-season, low sample)"
+      : "Goals model (calculated)";
 
     return {
       extras: [
