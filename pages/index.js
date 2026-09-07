@@ -24,6 +24,13 @@ function fmtDate(iso) {
     return new Date(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: TZ });
   } catch { return ""; }
 }
+// Stable "YYYY-MM-DD" grouping key in ICT — used to bucket fixtures by
+// matchday for the day tabs, independent of the display format above.
+function dayKey(iso) {
+  try {
+    return new Date(iso).toLocaleDateString("en-CA", { timeZone: TZ });
+  } catch { return ""; }
+}
 function fmtStamp(iso) {
   if (!iso) return "Last analyzed —";
   try {
@@ -38,7 +45,7 @@ function rowToMatch(r) {
     id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
     status: r.status, score: r.score,
     probs: r.probs || [], extras: r.extras || [], standout: r.standout || {},
-    agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebet_note,
+    agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebetNote,
   };
 }
 
@@ -160,6 +167,7 @@ export default function Home() {
   const [archived, setArchived] = useState([]);
   const [openId, setOpenId] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(null); // null = "All"; task 1a — day tabs on Upcoming
 
   const loadAll = useCallback(async () => {
     if (!supabase) return;
@@ -192,6 +200,24 @@ export default function Home() {
   );
   const upcoming = sorted.filter((m) => m.status !== "finished");
   const past = sorted.filter((m) => m.status === "finished");
+
+  // task 1a — one tab per distinct matchday among the upcoming fixtures,
+  // e.g. "Sat 12 Sept" / "Sun 13 Sept". Derived fresh from `upcoming` each
+  // render so it stays correct as fixtures finish and drop out of the list.
+  const upcomingDays = useMemo(() => {
+    const seen = new Map();
+    for (const m of upcoming) {
+      const key = dayKey(m.kickoffLocal);
+      if (key && !seen.has(key)) seen.set(key, { key, label: fmtDate(m.kickoffLocal) });
+    }
+    return Array.from(seen.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [upcoming]);
+
+  // Guard against a stale selection (e.g. that day's last fixture just
+  // finished and the tab disappeared) by falling back to "All" rather than
+  // showing an empty list with no visible way back.
+  const activeDay = selectedDay && upcomingDays.some((d) => d.key === selectedDay) ? selectedDay : null;
+  const visibleUpcoming = activeDay ? upcoming.filter((m) => dayKey(m.kickoffLocal) === activeDay) : upcoming;
 
   const toggle = (id) => setOpenId((cur) => (cur === id ? null : id));
 
@@ -242,9 +268,32 @@ export default function Home() {
               <Hero matches={matches} />
 
               <div className="section-label">Upcoming — kickoff times in Ho Chi Minh City (ICT)</div>
+
+              {upcomingDays.length > 1 && (
+                <div className="day-tabs">
+                  <button
+                    type="button"
+                    className={`day-tab ${activeDay === null ? "active" : ""}`}
+                    onClick={() => setSelectedDay(null)}
+                  >
+                    All
+                  </button>
+                  {upcomingDays.map((d) => (
+                    <button
+                      type="button"
+                      key={d.key}
+                      className={`day-tab ${activeDay === d.key ? "active" : ""}`}
+                      onClick={() => setSelectedDay(d.key)}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="matches">
-                {upcoming.length ? (
-                  upcoming.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)
+                {visibleUpcoming.length ? (
+                  visibleUpcoming.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)
                 ) : (
                   <div className="empty-state">
                     <p style={{ margin: 0 }}>No upcoming fixtures left in this round — check back once the next matchweek is analyzed.</p>
