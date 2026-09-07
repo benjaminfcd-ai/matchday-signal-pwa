@@ -2,7 +2,7 @@ name: Matchday Signal – Saturday update
 
 on:
   schedule:
-    - cron: "30 6 * * 6" # 13:30 ICT Saturday
+    - cron: "30 23 * * 5" # 06:30 ICT Saturday (12h before a typical 12:30 UK kickoff)
   workflow_dispatch: {}
 
 jobs:
