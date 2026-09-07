@@ -208,8 +208,17 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .empty-state h3 { font-size: 14.5px; color: var(--text-muted); margin-bottom: 6px; }
 .empty-state p { font-size: 13px; margin: 0; }
 
-.archived-round { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 8px; }
-.archived-round .rtitle { font-weight: 700; font-size: 14px; }
-.archived-round .rsub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
-
+   .archived-round {
+     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+     padding: 14px 16px; margin-bottom: 8px;
+     display: flex; align-items: center; justify-content: space-between; gap: 12px;
+   }
+   .archived-round .rtitle { font-weight: 700; font-size: 14px; }
+   .archived-round .rsub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+   .accuracy-chip {
+     font-size: 12px; font-weight: 700; padding: 5px 11px; border-radius: 999px; white-space: nowrap; flex-shrink: 0;
+   }
+   .accuracy-chip.good { background: var(--good-soft); color: var(--good); }
+   .accuracy-chip.bad { background: var(--bad-soft); color: var(--bad); }
+   .accuracy-chip.none { background: var(--surface-2); color: var(--text-faint); }
 .footer-note { font-size: 11.5px; color: var(--text-faint); margin-top: 30px; line-height: 1.6; }
