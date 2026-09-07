@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Head from "next/head";
 import { supabase } from "../lib/supabaseClient";
+import { computeRoundAccuracy } from "../lib/results";
 
 const TZ = "Asia/Ho_Chi_Minh";
 const AGREE_LABEL = { good: "Models agree", warn: "Models lean, not sure", bad: "Models conflict", split: "Split, tight" };
@@ -266,13 +267,24 @@ export default function Home() {
                   <div className="sub">Archived once a round is fully played and a new one is analyzed</div>
                 </div>
               </div>
-              {archived.length ? (
-                archived.map((r) => (
-                  <div className="archived-round" key={r.id}>
-                    <div className="rtitle">{r.round_label}</div>
-                    <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
-                  </div>
-                ))
+                         {archived.length ? (
+                archived.map((r) => {
+                  const { correct, graded } = computeRoundAccuracy(r.matches || []);
+                  const pct = graded ? Math.round((correct / graded) * 100) : null;
+                  return (
+                    <div className="archived-round" key={r.id}>
+                      <div>
+                        <div className="rtitle">{r.round_label}</div>
+                        <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
+                      </div>
+                      {pct != null ? (
+                        <span className={`accuracy-chip ${pct > 50 ? "good" : "bad"}`}>{correct}/{graded} correct — {pct}%</span>
+                      ) : (
+                        <span className="accuracy-chip none">Not enough graded picks</span>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
                 <div className="empty-state">
                   <h3>No completed rounds yet</h3>
