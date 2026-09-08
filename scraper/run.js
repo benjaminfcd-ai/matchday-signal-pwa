@@ -7,6 +7,7 @@ import { fetchEloPrediction } from "./lib/predictions/elo.js";
 import { computeTeamGoalStats, fetchGoalsPrediction } from "./lib/predictions/goalsModel.js";
 import { fetchXgContext } from "./lib/xg.js";
 import { computeAgreement } from "./lib/agreement.js";
+import { fetchStandings } from "./lib/standings.js";
 
 // This scraper runs on ONE recurring schedule — every 3 hours, all week
 // (see .github/workflows/research.yml) — rather than the old separate
@@ -45,7 +46,7 @@ function hoursUntil(kickoffIso, fromMs = Date.now()) {
   return (new Date(kickoffIso).getTime() - fromMs) / (60 * 60 * 1000);
 }
 
-async function researchFixture(f, teamStrengths) {
+async function researchFixture(f, teamStrengths, crestMap) {
   const [opta, win, soccervista, elo] = await Promise.all([
     fetchOptaPrediction(f.home, f.away),
     fetchWincomparatorPrediction(f.home, f.away),
@@ -69,6 +70,12 @@ async function researchFixture(f, teamStrengths) {
     id: f.id,
     home: f.home,
     away: f.away,
+    // f comes from a fresh DB row here (see main()), which won't carry crest
+    // fields for a fixture created before team badges existed — crestMap is
+    // built fresh from football-data.org every run, so this self-heals the
+    // first time each fixture is (re-)researched.
+    home_crest: crestMap?.get(f.home) ?? f.homeCrest ?? null,
+    away_crest: crestMap?.get(f.away) ?? f.awayCrest ?? null,
     kickoff_local: f.kickoffLocal,
     status: "upcoming",
     score: null,
@@ -87,6 +94,8 @@ function placeholderFixture(f) {
     id: f.id,
     home: f.home,
     away: f.away,
+    home_crest: f.homeCrest || null,
+    away_crest: f.awayCrest || null,
     kickoff_local: f.kickoffLocal,
     status: "upcoming",
     score: null,
@@ -241,10 +250,19 @@ async function main() {
     return h > 0 && h <= RESEARCH_WINDOW_HOURS;
   });
 
+  // Team crest URLs, keyed by canonical team name — rebuilt fresh every run
+  // from football-data.org (see fixtures.js) so even a fixture created
+  // before team badges existed gets one the next time it's (re-)researched.
+  const crestMap = new Map();
+  for (const f of seasonFixtures) {
+    if (f.homeCrest) crestMap.set(f.home, f.homeCrest);
+    if (f.awayCrest) crestMap.set(f.away, f.awayCrest);
+  }
+
   if (toResearch.length) {
     const researched = await Promise.all(
       toResearch.map((r) =>
-        researchFixture({ id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local }, teamStrengths)
+        researchFixture({ id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local }, teamStrengths, crestMap)
       )
     );
     const { error: upsertErr } = await supabaseAdmin.from("matches").upsert(researched);
@@ -256,6 +274,24 @@ async function main() {
 
   // 4. Archive the round once every fixture in it has finished.
   await archiveIfComplete();
+
+  // 5. Refresh the league table. Best-effort: a standings hiccup shouldn't
+  // fail the whole run when fixtures/predictions already succeeded.
+  try {
+    const standingsRows = await fetchStandings();
+    if (standingsRows.length) {
+      await supabaseAdmin.from("standings").upsert({
+        id: "current",
+        rows: standingsRows,
+        updated_at: new Date().toISOString(),
+      });
+      console.log(`Refreshed league table (${standingsRows.length} team(s)).`);
+    } else {
+      console.warn("Standings table came back empty — leaving the last known table in place.");
+    }
+  } catch (err) {
+    console.warn("Standings refresh failed (non-fatal):", err.message || err);
+  }
 
   await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status");
 }
