@@ -126,7 +126,11 @@ function MatchCard({ m, open, onToggle }) {
         {m.standout && m.standout.pick && (
           <div className="standout">
             <div className="label">{m.standout.market || "Standout signal"}</div>
-            <div className="pick">{m.standout.pick}{m.standout.pct != null ? ` — ${m.standout.pct}%` : ""}</div>
+            <div className="pick">
+              {m.standout.pick}
+              {m.standout.pct != null ? ` — ${m.standout.pct}%` : ""}
+              {m.standout.bestSource ? ` (${m.standout.bestSource})` : ""}
+            </div>
             {m.standout.note && <div className="note">{m.standout.note}</div>}
           </div>
         )}
@@ -184,7 +188,7 @@ function Hero({ matches }) {
         <div className="hero-block">
           <div className="eyebrow"><span className="dot" />Highest single reading</div>
           <div className="hero-title">{highest.standout.market} — {highest.standout.pick}, {highest.home} vs {highest.away}</div>
-          <p className="hero-desc"><b>{highest.standout.pct}%</b> from {highest.standout.source} — the single most one-sided number found this round.</p>
+          <p className="hero-desc"><b>{highest.standout.pct}%</b> from {highest.standout.bestSource || highest.standout.source} — the single most one-sided number found this round.</p>
         </div>
       )}
     </div>
