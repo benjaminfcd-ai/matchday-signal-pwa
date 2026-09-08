@@ -14,6 +14,8 @@ function favoredSide(p) {
 }
 
 export function computeAgreement(probs, home, away) {
+  const teamName = (label) => (label === "home" ? home : label === "away" ? away : "the draw");
+
   const readings = probs
     .map((p) => ({ source: p.source, ...favoredSide(p) }))
     .filter((r) => r.label != null);
@@ -22,7 +24,14 @@ export function computeAgreement(probs, home, away) {
     return {
       agreement: null,
       agreementNote: "No numeric source accessible for this fixture yet.",
-      standout: { market: "—", pick: "Not yet analyzed", pct: null, source: null, note: "Checked closer to kickoff." },
+      standout: {
+        market: "Match Winner",
+        pick: "Not yet analyzed",
+        pct: null,
+        sourcesUsed: 0,
+        totalSources: 0,
+        note: "Checked closer to kickoff.",
+      },
     };
   }
 
@@ -32,8 +41,6 @@ export function computeAgreement(probs, home, away) {
   const topReadings = readings.filter((r) => r.label === topLabel);
   const ratio = topReadings.length / readings.length;
   const avgConfidence = topReadings.reduce((s, r) => s + r.value, 0) / topReadings.length;
-  const bestReading = readings.reduce((best, r) => (r.value > (best?.value ?? -1) ? r : best), null);
-  const teamName = (label) => (label === "home" ? home : label === "away" ? away : "the draw");
 
   let agreement;
   if (ratio === 1 && readings.length >= 2) agreement = avgConfidence >= 45 ? "good" : "split";
@@ -51,17 +58,17 @@ export function computeAgreement(probs, home, away) {
   return {
     agreement,
     agreementNote,
+    // "Our Prediction" — deliberately NOT a 5th independent model. It's an
+    // honest consensus: whichever outcome the majority of sources lean
+    // toward, averaged across just those sources. sourcesUsed/totalSources
+    // make that "majority of N" basis visible in the UI, rather than
+    // presenting an average as if it were one confident, singular number.
     standout: {
       market: "Match Winner",
-      pick: teamName(bestReading.label),
-      pct: bestReading.value,
-      // "unanimous" flags that every source agreed on direction (used to
-      // decide the Hero "Most agreed-upon" card) — it is NOT a source name,
-      // so it must never be the only thing shown as this number's origin.
-      // bestSource is always the real source that published this exact
-      // percentage, for anywhere the number needs honest attribution.
-      source: ratio === 1 && readings.length >= 2 ? "unanimous" : bestReading.source,
-      bestSource: bestReading.source,
+      pick: teamName(topLabel),
+      pct: Math.round(avgConfidence),
+      sourcesUsed: topReadings.length,
+      totalSources: readings.length,
       note: null,
     },
   };
