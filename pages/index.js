@@ -43,10 +43,19 @@ function fmtStamp(iso) {
 function rowToMatch(r) {
   return {
     id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
+    homeCrest: r.home_crest || null, awayCrest: r.away_crest || null,
     status: r.status, score: r.score,
     probs: r.probs || [], extras: r.extras || [], standout: r.standout || {},
     agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebet_note,
   };
+}
+
+// A small team badge — renders nothing (rather than a broken-image icon) for
+// older fixtures scraped before crest URLs were captured; self-heals once
+// that fixture is next (re-)researched. See scraper/run.js.
+function Crest({ src, alt }) {
+  if (!src) return null;
+  return <img className="crest" src={src} alt={alt} loading="lazy" />;
 }
 
 function ProbBars({ p }) {
@@ -76,7 +85,11 @@ function MatchCard({ m, open, onToggle }) {
     <div className={`match ${open ? "open" : ""} ${m.status === "finished" ? "is-finished" : ""}`}>
       <div className="match-head" onClick={() => onToggle(m.id)}>
         <div>
-          <div className="teams">{m.home} vs {m.away}</div>
+          <div className="teams">
+            <Crest src={m.homeCrest} alt="" />
+            {m.home} vs {m.away}
+            <Crest src={m.awayCrest} alt="" />
+          </div>
           <div className="meta-line">
             {m.status === "finished"
               ? "Full time"
@@ -166,25 +179,90 @@ function Hero({ matches }) {
   );
 }
 
+// Position bands are the standard EPL convention this season: top 4 into the
+// Champions League, 5th into the Europa League, bottom 3 relegated. Purely a
+// visual cue — the numbers themselves come straight from football-data.org.
+function zoneClass(position) {
+  if (position <= 4) return "ucl";
+  if (position === 5) return "uel";
+  if (position >= 18) return "rel";
+  return "";
+}
+
+function StandingsTable({ standings }) {
+  const rows = standings?.rows || [];
+  if (!rows.length) {
+    return (
+      <div className="empty-state">
+        <h3>Table not available yet</h3>
+        <p>The league table is refreshed on the same schedule as predictions — check back shortly.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="table-wrap">
+      <table className="standings">
+        <thead>
+          <tr>
+            <th className="num">#</th>
+            <th className="team-col">Team</th>
+            <th className="num">MP</th>
+            <th className="num">W</th>
+            <th className="num">D</th>
+            <th className="num">L</th>
+            <th className="num">GD</th>
+            <th className="num pts">Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.team} className={zoneClass(r.position)}>
+              <td className="num zone-cell"><span className="zone-bar" />{r.position}</td>
+              <td className="team-col">
+                <Crest src={r.crest} alt="" />
+                {r.team}
+              </td>
+              <td className="num">{r.played}</td>
+              <td className="num">{r.won}</td>
+              <td className="num">{r.draw}</td>
+              <td className="num">{r.lost}</td>
+              <td className="num">{r.goalDifference > 0 ? `+${r.goalDifference}` : r.goalDifference}</td>
+              <td className="num pts">{r.points}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="table-legend">
+        <span><span className="zone-swatch ucl" />Champions League</span>
+        <span><span className="zone-swatch uel" />Europa League</span>
+        <span><span className="zone-swatch rel" />Relegation</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
-  const [view, setView] = useState("this"); // this | past | how
+  const [view, setView] = useState("this"); // this | past | table | how
   const [meta, setMeta] = useState({ round_label: "Premier League", last_updated: null });
   const [matches, setMatches] = useState([]);
   const [archived, setArchived] = useState([]);
+  const [standings, setStandings] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [connected, setConnected] = useState(false);
   const [selectedDay, setSelectedDay] = useState(null); // null = "All"; task 1a — day tabs on Upcoming
 
   const loadAll = useCallback(async () => {
     if (!supabase) return;
-    const [{ data: metaRow }, { data: matchRows }, { data: archRows }] = await Promise.all([
+    const [{ data: metaRow }, { data: matchRows }, { data: archRows }, { data: standingsRow }] = await Promise.all([
       supabase.from("meta").select("*").eq("id", "status").maybeSingle(),
       supabase.from("matches").select("*"),
       supabase.from("archived_rounds").select("*").order("archived_at", { ascending: false }),
+      supabase.from("standings").select("*").eq("id", "current").maybeSingle(),
     ]);
     if (metaRow) setMeta(metaRow);
     if (matchRows) setMatches(matchRows.map(rowToMatch));
     if (archRows) setArchived(archRows);
+    if (standingsRow) setStandings(standingsRow);
     setConnected(true);
   }, []);
 
@@ -196,6 +274,7 @@ export default function Home() {
       .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "meta" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "archived_rounds" }, loadAll)
+      .on("postgres_changes", { event: "*", schema: "public", table: "standings" }, loadAll)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadAll]);
@@ -248,6 +327,7 @@ export default function Home() {
           <nav>
             <div className={`nav-item ${view === "this" ? "active" : ""}`} onClick={() => setView("this")}>This round</div>
             <div className={`nav-item ${view === "past" ? "active" : ""}`} onClick={() => setView("past")}>Past rounds</div>
+            <div className={`nav-item ${view === "table" ? "active" : ""}`} onClick={() => setView("table")}>Table</div>
             <div className={`nav-item ${view === "how" ? "active" : ""}`} onClick={() => setView("how")}>How this works</div>
           </nav>
           <div className="legend">
@@ -364,6 +444,22 @@ export default function Home() {
                   <p>This round gets archived here automatically once it's fully played.</p>
                 </div>
               )}
+            </>
+          )}
+
+          {view === "table" && (
+            <>
+              <div className="topbar">
+                <div>
+                  <h1>Premier League table</h1>
+                  <div className="sub">
+                    {standings?.updated_at
+                      ? fmtStamp(standings.updated_at)
+                      : "Refreshed on the same schedule as predictions"}
+                  </div>
+                </div>
+              </div>
+              <StandingsTable standings={standings} />
             </>
           )}
 
