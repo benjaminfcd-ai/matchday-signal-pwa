@@ -59,11 +59,16 @@ function Crest({ src, alt }) {
 }
 
 function ProbBars({ p }) {
-  if (p.draw == null || p.away == null) {
+  // A source can publish just one side (e.g. Wincomparator always does) —
+  // that value can land in EITHER p.home or p.away depending on which team
+  // it favors, so both must be checked here, not just p.home, or a real
+  // away-favored single-side reading gets wrongly reported as unpublished.
+  if (p.home == null || p.draw == null || p.away == null) {
+    const singleSidePct = p.home != null ? p.home : p.away;
     return (
       <div className="prob-row">
         <div className="src"><span>{p.source}</span></div>
-        <div className="prob-na">{p.home != null ? `${p.home}% (single-side reading — draw/away not published)` : "Not published for this fixture"}</div>
+        <div className="prob-na">{singleSidePct != null ? `${singleSidePct}% (single-side reading — the rest not published)` : "Not published for this fixture"}</div>
       </div>
     );
   }
