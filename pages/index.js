@@ -229,14 +229,20 @@ export default function Home() {
 
   return (
     <>
-      <Head><title>Matchday Signal</title></Head>
+      <Head>
+        <title>Premier League Signal — Match Predictions Compared</title>
+        <meta
+          name="description"
+          content="Compare independent Premier League match predictions from Opta Analyst, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
+        />
+      </Head>
       <div className="shell">
         <aside className="sidebar">
           <div className="brand">
-            <div className="mark">MS</div>
+            <div className="mark">PL</div>
             <div>
-              <div className="name">Matchday Signal</div>
-              <div className="sub">Premier League</div>
+              <div className="name">Premier League Signal</div>
+              <div className="sub">Predictions, compared</div>
             </div>
           </div>
           <nav>
