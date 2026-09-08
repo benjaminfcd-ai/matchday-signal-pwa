@@ -272,6 +272,27 @@ async function main() {
     console.log("Nothing currently inside its pre-kickoff research window.");
   }
 
+  // Crest badges don't need to wait for a fixture's research window — the
+  // URL is free, already fetched above for every fixture this season, and
+  // updating it isn't a "re-research" (predictions/probs are untouched).
+  // Backfill any fixture that's still missing one — e.g. created before
+  // this feature existed — right away rather than waiting up to kickoff.
+  // Skip anything just (re-)researched above; it already got a fresh crest.
+  const toResearchIds = new Set(toResearch.map((r) => r.id));
+  const crestBackfill = (freshRows || [])
+    .filter((r) => !toResearchIds.has(r.id))
+    .filter((r) => (!r.home_crest && crestMap.get(r.home)) || (!r.away_crest && crestMap.get(r.away)))
+    .map((r) => ({
+      ...r,
+      home_crest: crestMap.get(r.home) || r.home_crest || null,
+      away_crest: crestMap.get(r.away) || r.away_crest || null,
+    }));
+  if (crestBackfill.length) {
+    const { error: crestErr } = await supabaseAdmin.from("matches").upsert(crestBackfill);
+    if (crestErr) throw crestErr;
+    console.log(`Backfilled crest badge(s) for ${crestBackfill.length} fixture(s) not otherwise touched this run.`);
+  }
+
   // 4. Archive the round once every fixture in it has finished.
   await archiveIfComplete();
 
