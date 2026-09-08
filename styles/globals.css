@@ -161,6 +161,8 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .day-tab:hover { background: var(--surface-2); color: var(--text); }
 .day-tab.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
+.crest { width: 18px; height: 18px; object-fit: contain; vertical-align: -4px; margin: 0 6px; flex-shrink: 0; }
+
 .matches { display: flex; flex-direction: column; gap: 10px; }
 
 .match { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
@@ -217,17 +219,57 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .empty-state h3 { font-size: 14.5px; color: var(--text-muted); margin-bottom: 6px; }
 .empty-state p { font-size: 13px; margin: 0; }
 
-   .archived-round {
-     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-     padding: 14px 16px; margin-bottom: 8px;
-     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-   }
-   .archived-round .rtitle { font-weight: 700; font-size: 14px; }
-   .archived-round .rsub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
-   .accuracy-chip {
-     font-size: 12px; font-weight: 700; padding: 5px 11px; border-radius: 999px; white-space: nowrap; flex-shrink: 0;
-   }
-   .accuracy-chip.good { background: var(--good-soft); color: var(--good); }
-   .accuracy-chip.bad { background: var(--bad-soft); color: var(--bad); }
-   .accuracy-chip.none { background: var(--surface-2); color: var(--text-faint); }
+.archived-round {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.archived-round .rtitle { font-weight: 700; font-size: 14px; }
+.archived-round .rsub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.accuracy-chip {
+  font-size: 12px; font-weight: 700; padding: 5px 11px; border-radius: 999px; white-space: nowrap; flex-shrink: 0;
+}
+.accuracy-chip.good { background: var(--good-soft); color: var(--good); }
+.accuracy-chip.bad { background: var(--bad-soft); color: var(--bad); }
+.accuracy-chip.none { background: var(--surface-2); color: var(--text-faint); }
+
 .footer-note { font-size: 11.5px; color: var(--text-faint); margin-top: 30px; line-height: 1.6; }
+
+.table-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  overflow: hidden; box-shadow: var(--shadow);
+}
+.standings { width: 100%; border-collapse: collapse; font-size: 13px; }
+.standings th, .standings td { padding: 10px 12px; text-align: left; white-space: nowrap; }
+.standings thead th {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint);
+  font-weight: 700; border-bottom: 1px solid var(--border);
+}
+.standings th.num, .standings td.num { text-align: center; font-variant-numeric: tabular-nums; }
+.standings th.pts, .standings td.pts { font-weight: 700; color: var(--text); }
+.standings td.team-col, .standings th.team-col { white-space: normal; width: 100%; }
+.standings tbody tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+.standings tbody tr:hover { background: var(--surface-2); }
+.standings .team-col { display: flex; align-items: center; font-weight: 600; }
+.standings .team-col .crest { margin: 0 10px 0 0; }
+
+.zone-cell { position: relative; }
+.zone-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+tr.ucl .zone-bar { background: var(--accent); }
+tr.uel .zone-bar { background: var(--warn); }
+tr.rel .zone-bar { background: var(--bad); }
+
+.table-legend {
+  display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 14px;
+  border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-faint);
+}
+.table-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.zone-swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.zone-swatch.ucl { background: var(--accent); }
+.zone-swatch.uel { background: var(--warn); }
+.zone-swatch.rel { background: var(--bad); }
+
+@media (max-width: 560px) {
+  .table-wrap { overflow-x: auto; }
+  .standings { min-width: 480px; }
+}
