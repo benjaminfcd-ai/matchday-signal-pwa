@@ -58,17 +58,24 @@ function Crest({ src, alt }) {
   return <img className="crest" src={src} alt={alt} loading="lazy" />;
 }
 
-function ProbBars({ p }) {
+function ProbBars({ p, home, away }) {
   // A source can publish just one side (e.g. Wincomparator always does) —
   // that value can land in EITHER p.home or p.away depending on which team
   // it favors, so both must be checked here, not just p.home, or a real
   // away-favored single-side reading gets wrongly reported as unpublished.
+  // A bare percentage means nothing to a visitor without the team it
+  // belongs to, so name the actual favored team rather than just "home".
   if (p.home == null || p.draw == null || p.away == null) {
     const singleSidePct = p.home != null ? p.home : p.away;
+    const favoredTeam = p.home != null ? home : away;
     return (
       <div className="prob-row">
         <div className="src"><span>{p.source}</span></div>
-        <div className="prob-na">{singleSidePct != null ? `${singleSidePct}% (single-side reading — the rest not published)` : "Not published for this fixture"}</div>
+        <div className="prob-na">
+          {singleSidePct != null
+            ? `${favoredTeam} to win — ${singleSidePct}% (only side published)`
+            : "Not published for this fixture"}
+        </div>
       </div>
     );
   }
@@ -125,7 +132,7 @@ function MatchCard({ m, open, onToggle }) {
         )}
         {m.probs && m.probs.length > 0 ? (
           <div className="probs">
-            {m.probs.map((p, i) => <ProbBars key={i} p={p} />)}
+            {m.probs.map((p, i) => <ProbBars key={i} p={p} home={m.home} away={m.away} />)}
           </div>
         ) : (
           <div className="prob-na">No numeric source accessible for this fixture yet.</div>
