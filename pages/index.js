@@ -40,6 +40,23 @@ function fmtStamp(iso) {
   } catch { return "Last analyzed —"; }
 }
 
+// Mirrors scraper/lib/agreement.js's favoredSide() — kept as a small local
+// copy (same pattern as lib/results.js) since this runs client-side against
+// data already in the browser, to find the single most one-sided individual
+// reading for the Hero "Highest single reading" card. Not used to compute
+// "Our Prediction" itself — that consensus is precomputed server-side and
+// arrives on m.standout.
+function favoredSide(p) {
+  if (p.home != null && p.draw != null && p.away != null) {
+    const entries = [["home", p.home], ["draw", p.draw], ["away", p.away]];
+    entries.sort((a, b) => b[1] - a[1]);
+    return { label: entries[0][0], value: entries[0][1] };
+  }
+  if (p.home != null) return { label: "home", value: p.home };
+  if (p.away != null) return { label: "away", value: p.away };
+  return null;
+}
+
 function rowToMatch(r) {
   return {
     id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
@@ -91,8 +108,20 @@ function ProbBars({ p, home, away }) {
   );
 }
 
+// Every source is still shown — nothing is hidden or dropped — but Opta and
+// Wincomparator are pulled out as the two featured reads (per the site's
+// stated flow: Our Prediction → Opta → Wincomparator → the rest), with any
+// remaining sources (SoccerVista, Club Elo, ...) tucked under a collapsed
+// "+N more sources" toggle so the card isn't a wall of equally-weighted
+// numbers. A fixture missing Opta or Wincomparator just skips that slot.
+const FEATURED_SOURCES = ["Opta Analyst", "Wincomparator"];
+
 function MatchCard({ m, open, onToggle }) {
   const isLive = m.status === "upcoming" && new Date(m.kickoffLocal).getTime() < Date.now();
+  const featured = FEATURED_SOURCES
+    .map((name) => (m.probs || []).find((p) => p.source === name))
+    .filter(Boolean);
+  const others = (m.probs || []).filter((p) => !FEATURED_SOURCES.includes(p.source));
   return (
     <div className={`match ${open ? "open" : ""} ${m.status === "finished" ? "is-finished" : ""}`}>
       <div className="match-head" onClick={() => onToggle(m.id)}>
@@ -125,19 +154,41 @@ function MatchCard({ m, open, onToggle }) {
       <div className="match-body">
         {m.standout && m.standout.pick && (
           <div className="standout">
-            <div className="label">{m.standout.market || "Standout signal"}</div>
+            <div className="label">Our Prediction</div>
             <div className="pick">
               {m.standout.pick}
               {m.standout.pct != null ? ` — ${m.standout.pct}%` : ""}
-              {m.standout.bestSource ? ` (${m.standout.bestSource})` : ""}
             </div>
+            {m.standout.totalSources > 0 && (
+              <div className="consensus-line">
+                {m.standout.sourcesUsed === m.standout.totalSources
+                  ? `All ${m.standout.totalSources} sources checked agree on this`
+                  : `${m.standout.sourcesUsed} of ${m.standout.totalSources} sources checked favor this`}
+              </div>
+            )}
             {m.standout.note && <div className="note">{m.standout.note}</div>}
           </div>
         )}
         {m.probs && m.probs.length > 0 ? (
-          <div className="probs">
-            {m.probs.map((p, i) => <ProbBars key={i} p={p} home={m.home} away={m.away} />)}
-          </div>
+          <>
+            {featured.length > 0 ? (
+              <div className="probs">
+                {featured.map((p, i) => <ProbBars key={i} p={p} home={m.home} away={m.away} />)}
+              </div>
+            ) : (
+              others.length > 0 && (
+                <div className="prob-na">Opta and Wincomparator aren't published yet for this fixture — see sources below.</div>
+              )
+            )}
+            {others.length > 0 && (
+              <details className="more-sources">
+                <summary>+ {others.length} more source{others.length > 1 ? "s" : ""}</summary>
+                <div className="probs">
+                  {others.map((p, i) => <ProbBars key={i} p={p} home={m.home} away={m.away} />)}
+                </div>
+              </details>
+            )}
+          </>
         ) : (
           <div className="prob-na">No numeric source accessible for this fixture yet.</div>
         )}
@@ -161,10 +212,22 @@ function MatchCard({ m, open, onToggle }) {
 
 function Hero({ matches }) {
   const candidates = matches.filter((m) => m.status !== "finished" || m.probs.length);
-  const unanimous = candidates.find((m) => m.agreement === "good" && m.standout?.source === "unanimous");
+  // "Most agreed-upon" — m.agreement === "good" already means every source
+  // checked favored the same side with decent average confidence (see
+  // scraper/lib/agreement.js), so this needs no extra unanimity flag.
+  const unanimous = candidates.find((m) => m.agreement === "good");
+  // "Highest single reading" is deliberately NOT read from m.standout — that
+  // field is now "Our Prediction" (a consensus across sources). This scans
+  // every source's own raw reading across every match to find the single
+  // most one-sided number actually published this round, and names which
+  // source published it.
   const highest = candidates.reduce((best, m) => {
-    const v = m.standout?.pct;
-    return v != null && (!best || v > best.standout.pct) ? m : best;
+    for (const p of m.probs || []) {
+      const r = favoredSide(p);
+      if (!r) continue;
+      if (!best || r.value > best.value) best = { ...r, source: p.source, match: m };
+    }
+    return best;
   }, null);
 
   if (!unanimous && !highest) return null;
@@ -187,8 +250,11 @@ function Hero({ matches }) {
       {highest && (
         <div className="hero-block">
           <div className="eyebrow"><span className="dot" />Highest single reading</div>
-          <div className="hero-title">{highest.standout.market} — {highest.standout.pick}, {highest.home} vs {highest.away}</div>
-          <p className="hero-desc"><b>{highest.standout.pct}%</b> from {highest.standout.bestSource || highest.standout.source} — the single most one-sided number found this round.</p>
+          <div className="hero-title">
+            {highest.label === "draw" ? "Draw" : highest.label === "home" ? highest.match.home : highest.match.away}
+            , {highest.match.home} vs {highest.match.away}
+          </div>
+          <p className="hero-desc"><b>{highest.value}%</b> from {highest.source} — the single most one-sided number found this round.</p>
         </div>
       )}
     </div>
@@ -483,7 +549,7 @@ export default function Home() {
             <div className="how">
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
-              <p>This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source, plus the single strongest and most-agreed-upon signal per match. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Each match card leads with "Our Prediction" — not a 5th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
               <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
               <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
             </div>
