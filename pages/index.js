@@ -45,7 +45,7 @@ function rowToMatch(r) {
     id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
     status: r.status, score: r.score,
     probs: r.probs || [], extras: r.extras || [], standout: r.standout || {},
-    agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebetNote,
+    agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebet_note,
   };
 }
 
@@ -145,7 +145,13 @@ function Hero({ matches }) {
       {unanimous && (
         <div className="hero-block">
           <div className="eyebrow"><span className="dot" />Most agreed-upon</div>
-          <div className="hero-title">{unanimous.home} to beat {unanimous.away}</div>
+          <div className="hero-title">
+            {unanimous.standout.pick === "Draw"
+              ? `${unanimous.home} vs ${unanimous.away} — Draw`
+              : `${unanimous.standout.pick} to beat ${
+                  unanimous.standout.pick === unanimous.home ? unanimous.away : unanimous.home
+                }`}
+          </div>
           <p className="hero-desc">Every model checked points the same way — direction is solid, though confidence varies by source.</p>
         </div>
       )}
@@ -311,7 +317,10 @@ export default function Home() {
               )}
 
               <p className="footer-note">
-                This page updates itself automatically — a scheduled job researches fixtures before each kickoff and writes straight to the database behind this page, so every open tab refreshes live with no button to press. Finished fixtures move into <b>Past games this round</b> as soon as they're checked and stay there through the weekend; the whole round moves to <b>Past rounds</b> once the last fixture is done.
+                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. Finished fixtures move into <b>Past games this round</b> as soon as they're checked and stay there through the weekend; the whole round moves to <b>Past rounds</b> once the last fixture is done.
+              </p>
+              <p className="footer-note">
+                This site is a research tool, not betting advice — it doesn't encourage placing bets and makes no promise of accuracy or profit. Agreement between models is a signal, not a guarantee, about any specific match. If you choose to bet elsewhere, please only do so with money you can afford to lose.
               </p>
             </>
           )}
@@ -357,7 +366,8 @@ export default function Home() {
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
               <p>This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source, plus the single strongest and most-agreed-upon signal per match. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
-              <p>A scheduled job (not this page) does the actual research before each kickoff and writes results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
+              <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
+              <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
             </div>
           )}
         </main>
