@@ -37,12 +37,26 @@ create table if not exists public.archived_rounds (
   archived_at timestamptz not null default now()
 );
 
+-- Team crest (badge) URLs, added after matches already existed — safe to
+-- re-run against a live table, does nothing if the columns are already there.
+alter table public.matches add column if not exists home_crest text;
+alter table public.matches add column if not exists away_crest text;
+
+-- ── standings: single row holding the current Premier League table ──
+-- (column named "rows", not "table" — "table" is a reserved SQL keyword)
+create table if not exists public.standings (
+  id text primary key default 'current',
+  rows jsonb not null default '[]',    -- [{position,team,crest,played,won,draw,lost,goalsFor,goalsAgainst,goalDifference,points}]
+  updated_at timestamptz not null default now()
+);
+
 -- ── Row Level Security: anyone can READ, nobody can WRITE except the
 --    service_role key (used only by the GitHub Actions scraper, never
 --    shipped to the browser). This keeps the public site read-only. ──
 alter table public.meta enable row level security;
 alter table public.matches enable row level security;
 alter table public.archived_rounds enable row level security;
+alter table public.standings enable row level security;
 
 drop policy if exists "public read meta" on public.meta;
 create policy "public read meta" on public.meta for select using (true);
@@ -52,6 +66,9 @@ create policy "public read matches" on public.matches for select using (true);
 
 drop policy if exists "public read archived_rounds" on public.archived_rounds;
 create policy "public read archived_rounds" on public.archived_rounds for select using (true);
+
+drop policy if exists "public read standings" on public.standings;
+create policy "public read standings" on public.standings for select using (true);
 
 -- No insert/update/delete policies are created for the publishable (anon) key,
 -- so writes are only possible using the project's secret (service_role) key —
