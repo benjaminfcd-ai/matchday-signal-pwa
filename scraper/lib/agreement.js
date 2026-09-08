@@ -55,7 +55,13 @@ export function computeAgreement(probs, home, away) {
       market: "Match Winner",
       pick: teamName(bestReading.label),
       pct: bestReading.value,
+      // "unanimous" flags that every source agreed on direction (used to
+      // decide the Hero "Most agreed-upon" card) — it is NOT a source name,
+      // so it must never be the only thing shown as this number's origin.
+      // bestSource is always the real source that published this exact
+      // percentage, for anywhere the number needs honest attribution.
       source: ratio === 1 && readings.length >= 2 ? "unanimous" : bestReading.source,
+      bestSource: bestReading.source,
       note: null,
     },
   };
