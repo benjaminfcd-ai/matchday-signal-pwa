@@ -56,6 +56,11 @@ export async function fetchSeasonFixtures() {
         id: slugify(home, away) + "-" + dateTag,
         home,
         away,
+        // football-data.org returns each club's crest URL right alongside the
+        // fixture — free, and already fetched for the schedule itself, so no
+        // extra request or new dependency is needed to show team badges.
+        homeCrest: m.homeTeam?.crest || null,
+        awayCrest: m.awayTeam?.crest || null,
         kickoffLocal: toIctIso(m.utcDate),
         status: finished ? "finished" : "upcoming",
         score: finished && homeScore != null && awayScore != null
@@ -67,11 +72,7 @@ export async function fetchSeasonFixtures() {
 
 /**
  * Given a reference "now" (ICT), return the Fri/Sat/Sun window that contains
- * it, or — if that window has already fully elapsed — the NEXT upcoming
- * Fri/Sat/Sun window. This matters whenever the Friday pass gets triggered
- * (by schedule or manually) after a previous weekend has already finished
- * and been archived: it should start the new round on the coming weekend,
- * not regenerate the one that just ended.
+ * (or immediately follows) it — i.e. "this weekend's" matchweek.
  */
 export function weekendWindow(nowIct = new Date()) {
   const day = nowIct.getUTCDay(); // 0 Sun .. 6 Sat, using UTC fields on an ICT-shifted date is fine here
@@ -80,16 +81,7 @@ export function weekendWindow(nowIct = new Date()) {
   const friday = new Date(nowIct);
   friday.setUTCDate(friday.getUTCDate() - daysSinceFriday);
   friday.setUTCHours(0, 0, 0, 0);
-  let mondayAfter = new Date(friday);
+  const mondayAfter = new Date(friday);
   mondayAfter.setUTCDate(friday.getUTCDate() + 3); // through end of Sunday
-
-  // If that window already fully ended (we're on the Monday-Thursday after
-  // it), roll forward one week to the next Friday-Sunday window instead.
-  if (mondayAfter.getTime() <= nowIct.getTime()) {
-    friday.setUTCDate(friday.getUTCDate() + 7);
-    mondayAfter = new Date(friday);
-    mondayAfter.setUTCDate(friday.getUTCDate() + 3);
-  }
-
   return { start: friday, end: mondayAfter };
 }
