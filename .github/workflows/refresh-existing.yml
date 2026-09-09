@@ -1,0 +1,33 @@
+name: Premier League Signal – refresh already-researched fixtures (manual)
+
+# ONE-OFF tool, not a recurring job — no `schedule:` trigger on purpose.
+# Run it by hand (Actions tab → this workflow → "Run workflow") whenever
+# already-researched fixtures need to pick up fresh data or a prediction
+# formula change right away, instead of waiting for each one's own 12-hour
+# pre-kickoff window. The regular every-3-hours scraper (research.yml) is
+# completely unaffected by this file — its 12-hour-per-fixture schedule
+# stays exactly as designed, always.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install scraper dependencies
+        working-directory: scraper
+        run: npm install
+      - name: Install headless browser
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+      - name: Refresh already-researched fixtures
+        working-directory: scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+        run: node refresh-existing.js
