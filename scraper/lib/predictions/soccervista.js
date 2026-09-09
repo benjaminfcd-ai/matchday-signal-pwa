@@ -1,6 +1,9 @@
 import { withPage } from "../browser.js";
 
-const LEAGUE_URL = "https://www.soccervista.com/england/premier-league/dYlOSQOD/";
+const LEAGUE_URLS = {
+  PL: "https://www.soccervista.com/england/premier-league/dYlOSQOD/",
+  CL: "https://www.soccervista.com/europe/champions-league/xGrwqq16/",
+};
 
 // SoccerVista's fixture/prediction content is rendered client-side by
 // JavaScript (confirmed: a plain HTTP fetch of this page returns only the
@@ -12,7 +15,7 @@ const LEAGUE_URL = "https://www.soccervista.com/england/premier-league/dYlOSQOD/
 // hasn't been inspected directly (only its static HTML, before JS runs) —
 // so this heuristic is a first pass, more likely than the others to need
 // adjusting once you see a real run's output. If it comes back empty every
-// time, check LEAGUE_URL still resolves to a live Premier League page and
+// time, check the league URL still resolves to a live predictions page and
 // use the run's log (or a local `node scraper/run.js` run) to see what
 // `page.innerText("body")` actually contains, then adjust the patterns
 // below to match. Per this project's hard rule, it returns null rather than
@@ -22,20 +25,21 @@ const LEAGUE_URL = "https://www.soccervista.com/england/premier-league/dYlOSQOD/
 // language and gambling disclaimers on its own pages) — this project only
 // ever reads its predicted pick/percentage, never odds, stakes, or EV, in
 // line with this project's hard "no betting content" rule.
-export async function fetchSoccervistaPrediction(home, away) {
+export async function fetchSoccervistaPrediction(home, away, competition = "PL") {
+  const leagueUrl = LEAGUE_URLS[competition] || LEAGUE_URLS.PL;
   try {
     return await withPage(async (page) => {
-      await page.goto(LEAGUE_URL, { waitUntil: "networkidle", timeout: 45000 });
+      await page.goto(leagueUrl, { waitUntil: "networkidle", timeout: 45000 });
       const text = await page.innerText("body");
-      return extractFromText(text, home, away);
+      return extractFromText(text, home, away, leagueUrl);
     });
   } catch (err) {
-    console.warn(`[soccervista] failed for ${home} vs ${away}:`, err.message);
+    console.warn(`[soccervista] failed for ${home} vs ${away} (${competition}):`, err.message);
     return null;
   }
 }
 
-export function extractFromText(text, home, away) {
+export function extractFromText(text, home, away, leagueUrl = LEAGUE_URLS.PL) {
   const homeIdx = text.indexOf(home);
   const awayIdx = text.indexOf(away);
   if (homeIdx === -1 || awayIdx === -1) return null;
@@ -87,7 +91,7 @@ export function extractFromText(text, home, away) {
   const pcts = [...block.matchAll(/(\d{1,2})\s?%/g)].map((m) => parseFloat(m[1]));
   const prob =
     pcts.length >= 3
-      ? { source: "SoccerVista", url: LEAGUE_URL, home: pcts[0], draw: pcts[1], away: pcts[2] }
+      ? { source: "SoccerVista", url: leagueUrl, home: pcts[0], draw: pcts[1], away: pcts[2] }
       : null;
 
   if (!prob && extras.length === 0) return null;
