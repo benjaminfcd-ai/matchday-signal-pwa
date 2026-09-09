@@ -1,6 +1,9 @@
 import { withPage } from "../browser.js";
 
-const LEAGUE_URL = "https://www.wincomparator.com/predictions/football/england/premier-league-49/";
+const LEAGUE_URLS = {
+  PL: "https://www.wincomparator.com/predictions/football/england/premier-league-49/",
+  CL: "https://www.wincomparator.com/predictions/football/europe/champions-league-8/",
+};
 
 // Wincomparator's listing page shows each fixture with a single predicted
 // "Probability: NN%" reading (not always a full home/draw/away breakdown) —
@@ -9,21 +12,22 @@ const LEAGUE_URL = "https://www.wincomparator.com/predictions/football/england/p
 // belongs to whichever team name sits closer to that percentage in the text.
 // NOTE: if wincomparator's page layout changes, or a match's block isn't
 // found, this returns null (per the project's "never fabricate" rule) —
-// check LEAGUE_URL still lists upcoming fixtures if this keeps failing.
-export async function fetchWincomparatorPrediction(home, away) {
+// check the league URL still lists upcoming fixtures if this keeps failing.
+export async function fetchWincomparatorPrediction(home, away, competition = "PL") {
+  const leagueUrl = LEAGUE_URLS[competition] || LEAGUE_URLS.PL;
   try {
     return await withPage(async (page) => {
-      await page.goto(LEAGUE_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(leagueUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
       const text = await page.innerText("body");
-      return extractFromText(text, home, away);
+      return extractFromText(text, home, away, leagueUrl);
     });
   } catch (err) {
-    console.warn(`[wincomparator] failed for ${home} vs ${away}:`, err.message);
+    console.warn(`[wincomparator] failed for ${home} vs ${away} (${competition}):`, err.message);
     return null;
   }
 }
 
-export function extractFromText(text, home, away) {
+export function extractFromText(text, home, away, leagueUrl = LEAGUE_URLS.PL) {
   const homeIdx = text.indexOf(home);
   const awayIdx = text.indexOf(away);
   if (homeIdx === -1 || awayIdx === -1) return null;
@@ -45,7 +49,7 @@ export function extractFromText(text, home, away) {
 
   return {
     source: "Wincomparator",
-    url: LEAGUE_URL,
+    url: leagueUrl,
     home: favorsHome ? pct : null,
     draw: null,
     away: favorsHome ? null : pct,
