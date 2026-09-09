@@ -161,6 +161,18 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .day-tab:hover { background: var(--surface-2); color: var(--text); }
 .day-tab.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
+/* Competition switch (Premier League / Champions League) at the top of
+   "This round's signal" — same pill language as .day-tab, one size up
+   since it's the primary switch for the whole view, not a secondary filter. */
+.comp-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.comp-tab {
+  font-family: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
+  padding: 9px 18px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-muted);
+}
+.comp-tab:hover { background: var(--surface-2); color: var(--text); }
+.comp-tab.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
 .crest { width: 18px; height: 18px; object-fit: contain; vertical-align: -4px; margin: 0 6px; flex-shrink: 0; }
 
 .matches { display: flex; flex-direction: column; gap: 10px; }
