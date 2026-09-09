@@ -23,20 +23,30 @@ import { researchFixture } from "./lib/research.js";
 // fixture that's already been researched at least once, right now,
 // regardless of how far off its kickoff is, so they catch up immediately.
 async function main() {
-  const seasonFixtures = await fetchSeasonFixtures();
+  // Both competitions — a row's own `competition` field picks the right
+  // source URLs at research time (see research.js), so every already-
+  // researched fixture gets refreshed correctly regardless of which
+  // competition it belongs to.
+  const [plFixtures, clFixtures] = await Promise.all([
+    fetchSeasonFixtures("PL"),
+    fetchSeasonFixtures("CL"),
+  ]);
+  const seasonFixtures = [...plFixtures, ...clFixtures];
 
   const { data: rows, error: readErr } = await supabaseAdmin.from("matches").select("*");
   if (readErr) throw readErr;
 
   const toRefresh = (rows || []).filter((r) => r.status === "upcoming" && r.probs && r.probs.length > 0);
   if (!toRefresh.length) {
-    console.log("Nothing to refresh — no already-researched upcoming fixtures found in the current round.");
+    console.log("Nothing to refresh — no already-researched upcoming fixtures found in the current round(s).");
     return;
   }
   console.log(`Refreshing ${toRefresh.length} already-researched fixture(s) with fresh data from every source...`);
 
   const xgContext = await fetchXgContext();
-  const teamStrengths = computeTeamGoalStats(seasonFixtures, xgContext);
+  // Goals model stays Premier-League-only, same as run.js — see that
+  // file's comment for why plFixtures (not the combined list) is passed.
+  const teamStrengths = computeTeamGoalStats(plFixtures, xgContext);
 
   // Same crest self-heal as run.js — free, no extra fetch, since seasonFixtures
   // is already pulled above.
@@ -49,7 +59,7 @@ async function main() {
   const refreshed = [];
   for (const r of toRefresh) {
     const row = await researchFixture(
-      { id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local },
+      { id: r.id, competition: r.competition, home: r.home, away: r.away, kickoffLocal: r.kickoff_local },
       teamStrengths,
       crestMap
     );
@@ -61,6 +71,7 @@ async function main() {
   if (upsertErr) throw upsertErr;
 
   await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status");
+  await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status_CL");
   console.log(`Done — refreshed ${refreshed.length} fixture(s) with live data.`);
 }
 
