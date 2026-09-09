@@ -395,6 +395,15 @@ export default function Home() {
     () => compMatches.slice().sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal)),
     [compMatches]
   );
+
+  // Past rounds gets the same toggle and filter as "This round's signal" —
+  // archived_rounds rows carry their own `competition` (set at archive
+  // time in scraper/run.js), defaulting to "PL" for rounds archived before
+  // Champions League support existed.
+  const compArchived = useMemo(
+    () => archived.filter((r) => (r.competition || "PL") === competition),
+    [archived, competition]
+  );
   const upcoming = sorted.filter((m) => m.status !== "finished");
   const past = sorted.filter((m) => m.status === "finished");
 
@@ -540,14 +549,27 @@ export default function Home() {
 
           {view === "past" && (
             <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="topbar">
                 <div>
                   <h1>Past rounds</h1>
                   <div className="sub">Archived once a round is fully played and a new one is analyzed</div>
                 </div>
               </div>
-              {archived.length ? (
-                archived.map((r) => {
+              {compArchived.length ? (
+                compArchived.map((r) => {
                   const { correct, graded } = computeRoundAccuracy(r.matches || []);
                   const pct = graded ? Math.round((correct / graded) * 100) : null;
                   const hideBadge = HIDE_ACCURACY_FOR_ROUNDS.has(r.round_label);
@@ -567,8 +589,8 @@ export default function Home() {
                 })
               ) : (
                 <div className="empty-state">
-                  <h3>No completed rounds yet</h3>
-                  <p>This round gets archived here automatically once it's fully played.</p>
+                  <h3>No completed {competition === "CL" ? "Champions League" : "Premier League"} rounds yet</h3>
+                  <p>A round gets archived here automatically once every fixture in it has been played.</p>
                 </div>
               )}
             </>
