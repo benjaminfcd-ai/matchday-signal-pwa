@@ -25,12 +25,61 @@ export const TEAM_ALIASES = {
   "Ipswich Town": ["Ipswich", "Ipswich Town"],
   "Leicester City": ["Leicester", "Leicester City"],
   "Southampton": ["Southampton"],
+
+  // Champions League — major European clubs likely to appear in a given
+  // season's league-phase draw. This list is deliberately best-effort, not
+  // exhaustive: canonicalTeam()'s partial-match fallback below already
+  // handles most unlisted clubs reasonably (a club not listed here just
+  // keeps its source-provided name rather than getting normalized across
+  // sources) — same graceful, "never fabricate" degrade as the rest of
+  // this project. Extend this list as real CL fixtures reveal club-name
+  // mismatches between football-data.org and the scraped prediction sites.
+  "Real Madrid": ["Real Madrid", "Real Madrid CF"],
+  "Barcelona": ["Barcelona", "FC Barcelona", "Barça"],
+  "Atletico Madrid": ["Atletico Madrid", "Atlético Madrid", "Atletico de Madrid", "Club Atlético de Madrid"],
+  "Bayern Munich": ["Bayern Munich", "Bayern München", "FC Bayern München", "Bayern"],
+  "Borussia Dortmund": ["Borussia Dortmund", "Dortmund", "BVB"],
+  "RB Leipzig": ["RB Leipzig", "Leipzig"],
+  "Bayer Leverkusen": ["Bayer Leverkusen", "Leverkusen", "Bayer 04 Leverkusen"],
+  "Paris Saint-Germain": ["Paris Saint-Germain", "PSG", "Paris SG"],
+  "Monaco": ["Monaco", "AS Monaco"],
+  "Marseille": ["Marseille", "Olympique de Marseille", "OM"],
+  "Juventus": ["Juventus", "Juventus FC", "Juve"],
+  "Inter Milan": ["Inter Milan", "Inter", "FC Internazionale Milano", "Internazionale"],
+  "AC Milan": ["AC Milan", "Milan"],
+  "Napoli": ["Napoli", "SSC Napoli"],
+  "Atalanta": ["Atalanta", "Atalanta BC"],
+  "Benfica": ["Benfica", "SL Benfica"],
+  "Porto": ["Porto", "FC Porto"],
+  "Sporting CP": ["Sporting CP", "Sporting Clube de Portugal", "Sporting Lisbon"],
+  "Ajax": ["Ajax", "AFC Ajax"],
+  "PSV Eindhoven": ["PSV Eindhoven", "PSV"],
+  "Feyenoord": ["Feyenoord", "Feyenoord Rotterdam"],
+  "Club Brugge": ["Club Brugge", "Club Brugge KV"],
+  "Union Saint-Gilloise": ["Union Saint-Gilloise", "Royale Union Saint-Gilloise"],
+  "Celtic": ["Celtic", "Celtic FC"],
+  "Shakhtar Donetsk": ["Shakhtar Donetsk", "Shakhtar"],
+  "Dynamo Kyiv": ["Dynamo Kyiv", "Dynamo Kiev"],
+  "Red Bull Salzburg": ["Red Bull Salzburg", "RB Salzburg", "Salzburg"],
+  "Sturm Graz": ["Sturm Graz"],
+  "Slavia Prague": ["Slavia Prague", "SK Slavia Praha"],
+  "Sparta Prague": ["Sparta Prague", "AC Sparta Praha"],
+  "Galatasaray": ["Galatasaray", "Galatasaray SK"],
+  "Fenerbahce": ["Fenerbahce", "Fenerbahçe"],
+  "Olympiacos": ["Olympiacos", "Olympiacos FC"],
+  "PAOK": ["PAOK", "PAOK FC"],
+  "Bodo/Glimt": ["Bodo/Glimt", "Bodø/Glimt", "FK Bodø/Glimt"],
+  "Copenhagen": ["Copenhagen", "FC København", "FC Copenhagen"],
+  "Qarabag": ["Qarabag", "Qarabağ", "Qarabag FK"],
 };
 
 const FLAT_ALIASES = Object.entries(TEAM_ALIASES).flatMap(([canonical, names]) =>
   names.map((n) => [n.toLowerCase(), canonical])
 );
 
+// Resolve any spelling/short-name of a club to its canonical name, or return
+// the input unchanged if unrecognized (better to keep an unrecognized name
+// visible than silently drop the fixture).
 export function canonicalTeam(name) {
   if (!name) return name;
   // football-data.org names include the club suffix, e.g. "Arsenal FC",
