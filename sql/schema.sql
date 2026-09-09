@@ -42,6 +42,15 @@ create table if not exists public.archived_rounds (
 alter table public.matches add column if not exists home_crest text;
 alter table public.matches add column if not exists away_crest text;
 
+-- Competition support, added after Premier-League-only already existed —
+-- defaults every existing row to 'PL' so nothing already stored changes
+-- meaning. New Champions League rows are written with competition = 'CL'.
+-- The PL fixture ID format (see scraper/lib/teams.js slugify()) is left
+-- completely untouched for backward compatibility; CL fixtures get a
+-- 'cl-' prefixed ID instead so the two competitions can never collide.
+alter table public.matches add column if not exists competition text not null default 'PL';
+alter table public.archived_rounds add column if not exists competition text not null default 'PL';
+
 -- ── standings: single row holding the current Premier League table ──
 -- (column named "rows", not "table" — "table" is a reserved SQL keyword)
 create table if not exists public.standings (
