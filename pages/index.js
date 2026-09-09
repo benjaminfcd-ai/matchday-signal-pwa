@@ -57,15 +57,30 @@ function favoredSide(p) {
   return null;
 }
 
+// Rows written before Champions League support existed have no
+// `competition` column value other than the schema default — defaulting to
+// "PL" here client-side too means an older row displays exactly where it
+// always has, with no migration needed.
 function rowToMatch(r) {
   return {
-    id: r.id, home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
+    id: r.id, competition: r.competition || "PL", home: r.home, away: r.away, kickoffLocal: r.kickoff_local,
     homeCrest: r.home_crest || null, awayCrest: r.away_crest || null,
     status: r.status, score: r.score,
     probs: r.probs || [], extras: r.extras || [], standout: r.standout || {},
     agreement: r.agreement, agreementNote: r.agreement_note, forebetNote: r.forebet_note,
   };
 }
+
+// Mirrors scraper/run.js's metaId()/competitionLabel() — the Premier League
+// meta row keeps its original id ("status") untouched; Champions League
+// gets its own row at "status_CL" instead of a schema change.
+function metaId(competition) {
+  return competition === "PL" ? "status" : `status_${competition}`;
+}
+const COMPETITIONS = [
+  { id: "PL", label: "Premier League" },
+  { id: "CL", label: "Champions League" },
+];
 
 // A small team badge — renders nothing (rather than a broken-image icon) for
 // older fixtures scraped before crest URLs were captured; self-heals once
@@ -325,7 +340,8 @@ function StandingsTable({ standings }) {
 
 export default function Home() {
   const [view, setView] = useState("this"); // this | past | table | how
-  const [meta, setMeta] = useState({ round_label: "Premier League", last_updated: null });
+  const [competition, setCompetition] = useState("PL"); // PL | CL — toggle at the top of "This round's signal"
+  const [metaRows, setMetaRows] = useState([]); // both competitions' meta rows — pick the active one when rendering
   const [matches, setMatches] = useState([]);
   const [archived, setArchived] = useState([]);
   const [standings, setStandings] = useState(null);
@@ -335,13 +351,16 @@ export default function Home() {
 
   const loadAll = useCallback(async () => {
     if (!supabase) return;
-    const [{ data: metaRow }, { data: matchRows }, { data: archRows }, { data: standingsRow }] = await Promise.all([
-      supabase.from("meta").select("*").eq("id", "status").maybeSingle(),
+    // meta is fetched without an id filter so both the Premier League
+    // ("status") and Champions League ("status_CL") rows come back at
+    // once — the toggle below just picks which one to show, no refetch.
+    const [{ data: metaData }, { data: matchRows }, { data: archRows }, { data: standingsRow }] = await Promise.all([
+      supabase.from("meta").select("*"),
       supabase.from("matches").select("*"),
       supabase.from("archived_rounds").select("*").order("archived_at", { ascending: false }),
       supabase.from("standings").select("*").eq("id", "current").maybeSingle(),
     ]);
-    if (metaRow) setMeta(metaRow);
+    if (metaData) setMetaRows(metaData);
     if (matchRows) setMatches(matchRows.map(rowToMatch));
     if (archRows) setArchived(archRows);
     if (standingsRow) setStandings(standingsRow);
@@ -361,9 +380,20 @@ export default function Home() {
     return () => { supabase.removeChannel(channel); };
   }, [loadAll]);
 
+  // "This round's signal" shows one competition at a time — the toggle
+  // just swaps this filter, no refetch, since `matches` already holds both.
+  const compMatches = useMemo(
+    () => matches.filter((m) => m.competition === competition),
+    [matches, competition]
+  );
+  const meta = useMemo(() => {
+    const row = metaRows.find((r) => r.id === metaId(competition));
+    return row || { round_label: COMPETITIONS.find((c) => c.id === competition)?.label || competition, last_updated: null };
+  }, [metaRows, competition]);
+
   const sorted = useMemo(
-    () => matches.slice().sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal)),
-    [matches]
+    () => compMatches.slice().sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal)),
+    [compMatches]
   );
   const upcoming = sorted.filter((m) => m.status !== "finished");
   const past = sorted.filter((m) => m.status === "finished");
@@ -394,7 +424,7 @@ export default function Home() {
         <title>Premier League Signal — Match Predictions Compared</title>
         <meta
           name="description"
-          content="Compare independent Premier League match predictions from Opta Analyst, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
+          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Forebet, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
         />
       </Head>
       <div className="shell">
@@ -415,8 +445,10 @@ export default function Home() {
           <div className="legend">
             <div className="legend-title">Sources checked</div>
             <div className="legend-row"><span>Opta Analyst</span><span className="dim">win probability</span></div>
-            <div className="legend-row"><span>Forebet</span><span className="dim">1X2 + goals</span></div>
+            <div className="legend-row"><span>Forebet</span><span className="dim">1X2</span></div>
             <div className="legend-row"><span>Wincomparator</span><span className="dim">1X2 + goals</span></div>
+            <div className="legend-row"><span>SoccerVista</span><span className="dim">1X2 + goals</span></div>
+            <div className="legend-row"><span>Club Elo</span><span className="dim">win probability</span></div>
           </div>
           <div className="legend">
             <div className="legend-row">
@@ -428,6 +460,19 @@ export default function Home() {
         <main>
           {view === "this" && (
             <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="topbar">
                 <div>
                   <h1>This round's signal</h1>
@@ -439,7 +484,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <Hero matches={matches} />
+              <Hero matches={compMatches} />
 
               <div className="section-label">Upcoming — kickoff times in Ho Chi Minh City (ICT)</div>
 
@@ -470,7 +515,7 @@ export default function Home() {
                   visibleUpcoming.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)
                 ) : (
                   <div className="empty-state">
-                    <p style={{ margin: 0 }}>No upcoming fixtures left in this round — check back once the next matchweek is analyzed.</p>
+                    <p style={{ margin: 0 }}>No upcoming {competition === "CL" ? "Champions League" : "Premier League"} fixtures left in this round — check back once the next round is analyzed.</p>
                   </div>
                 )}
               </div>
@@ -549,7 +594,8 @@ export default function Home() {
             <div className="how">
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
-              <p>Each match card leads with "Our Prediction" — not a 5th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Each match card leads with "Our Prediction" — not a 6th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (Forebet, SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Premier League and Champions League fixtures get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends.</p>
               <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
               <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
             </div>
