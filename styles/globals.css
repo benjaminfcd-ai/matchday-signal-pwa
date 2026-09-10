@@ -283,6 +283,13 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 tr.ucl .zone-bar { background: var(--accent); }
 tr.uel .zone-bar { background: var(--warn); }
 tr.rel .zone-bar { background: var(--bad); }
+/* Champions League league-phase table zones — same three-tier color
+   language as the Premier League zones above (best/middle/worst), just
+   with Champions League's own thresholds: top 8 go straight through,
+   9th-24th get a playoff round, 25th-36th are eliminated. */
+tr.r16 .zone-bar { background: var(--accent); }
+tr.playoff .zone-bar { background: var(--warn); }
+tr.out .zone-bar { background: var(--bad); }
 
 .table-legend {
   display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 14px;
@@ -293,6 +300,9 @@ tr.rel .zone-bar { background: var(--bad); }
 .zone-swatch.ucl { background: var(--accent); }
 .zone-swatch.uel { background: var(--warn); }
 .zone-swatch.rel { background: var(--bad); }
+.zone-swatch.r16 { background: var(--accent); }
+.zone-swatch.playoff { background: var(--warn); }
+.zone-swatch.out { background: var(--bad); }
 
 @media (max-width: 560px) {
   .table-wrap { overflow-x: auto; }
