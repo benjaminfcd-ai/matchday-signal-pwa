@@ -319,24 +319,29 @@ async function main() {
   await archiveIfComplete("PL");
   await archiveIfComplete("CL");
 
-  // 5. Refresh the league table. Best-effort: a standings hiccup shouldn't
-  // fail the whole run when fixtures/predictions already succeeded. Premier
-  // League table only — the Champions League's league-phase standings
-  // aren't shown on this site.
-  try {
-    const standingsRows = await fetchStandings();
-    if (standingsRows.length) {
-      await supabaseAdmin.from("standings").upsert({
-        id: "current",
-        rows: standingsRows,
-        updated_at: new Date().toISOString(),
-      });
-      console.log(`Refreshed league table (${standingsRows.length} team(s)).`);
-    } else {
-      console.warn("Standings table came back empty — leaving the last known table in place.");
+  // 5. Refresh the league table for each competition. Best-effort and
+  // independent per competition: a standings hiccup for one shouldn't fail
+  // the whole run, and shouldn't block the other competition's table either
+  // — same "current" row id the app has always read for Premier League
+  // (untouched), plus a new "current_CL" row for the Champions League
+  // league-phase table (see standings.js — it's fetched the same way).
+  for (const competition of ["PL", "CL"]) {
+    try {
+      const standingsRows = await fetchStandings(competition);
+      if (standingsRows.length) {
+        await supabaseAdmin.from("standings").upsert({
+          id: competition === "PL" ? "current" : `current_${competition}`,
+          competition,
+          rows: standingsRows,
+          updated_at: new Date().toISOString(),
+        });
+        console.log(`Refreshed ${competitionLabel(competition)} table (${standingsRows.length} team(s)).`);
+      } else {
+        console.warn(`${competitionLabel(competition)} standings came back empty — leaving the last known table in place.`);
+      }
+    } catch (err) {
+      console.warn(`${competitionLabel(competition)} standings refresh failed (non-fatal):`, err.message || err);
     }
-  } catch (err) {
-    console.warn("Standings refresh failed (non-fatal):", err.message || err);
   }
 
   await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status");
