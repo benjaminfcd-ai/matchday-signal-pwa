@@ -433,7 +433,7 @@ export default function Home() {
         <title>Premier League Signal — Match Predictions Compared</title>
         <meta
           name="description"
-          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Forebet, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
+          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
         />
       </Head>
       <div className="shell">
@@ -454,7 +454,6 @@ export default function Home() {
           <div className="legend">
             <div className="legend-title">Sources checked</div>
             <div className="legend-row"><span>Opta Analyst</span><span className="dim">win probability</span></div>
-            <div className="legend-row"><span>Forebet</span><span className="dim">1X2</span></div>
             <div className="legend-row"><span>Wincomparator</span><span className="dim">1X2 + goals</span></div>
             <div className="legend-row"><span>SoccerVista</span><span className="dim">1X2 + goals</span></div>
             <div className="legend-row"><span>Club Elo</span><span className="dim">win probability</span></div>
@@ -529,17 +528,8 @@ export default function Home() {
                 )}
               </div>
 
-              {past.length > 0 && (
-                <>
-                  <div className="section-label">Past games this round</div>
-                  <div className="matches">
-                    {past.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
-                  </div>
-                </>
-              )}
-
               <p className="footer-note">
-                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. Finished fixtures move into <b>Past games this round</b> as soon as they're checked and stay there through the weekend; the whole round moves to <b>Past rounds</b> once the last fixture is done.
+                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. As soon as a fixture is confirmed finished, it moves straight into the <b>Past rounds</b> tab — that round's accuracy percentage only appears there once every fixture in it has been played.
               </p>
               <p className="footer-note">
                 This site is a research tool, not betting advice — it doesn't encourage placing bets and makes no promise of accuracy or profit. Agreement between models is a signal, not a guarantee, about any specific match. If you choose to bet elsewhere, please only do so with money you can afford to lose.
@@ -565,10 +555,25 @@ export default function Home() {
               <div className="topbar">
                 <div>
                   <h1>Past rounds</h1>
-                  <div className="sub">Archived once a round is fully played and a new one is analyzed</div>
+                  <div className="sub">Finished fixtures land here the moment they're checked — a round's accuracy only shows once every fixture in it has been played</div>
                 </div>
               </div>
-              {compArchived.length ? (
+
+              {past.length > 0 && (
+                <>
+                  <div className="section-label">{meta.round_label} — in progress ({past.length} of {sorted.length} played)</div>
+                  <div className="matches">
+                    {past.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
+                  </div>
+                  <p className="footer-note">This round isn't archived yet — its accuracy percentage will appear below once its last fixture is finished.</p>
+                </>
+              )}
+
+              {compArchived.length > 0 && past.length > 0 && (
+                <div className="section-label">Completed rounds</div>
+              )}
+
+              {compArchived.length > 0 ? (
                 compArchived.map((r) => {
                   const { correct, graded } = computeRoundAccuracy(r.matches || []);
                   const pct = graded ? Math.round((correct / graded) * 100) : null;
@@ -588,10 +593,12 @@ export default function Home() {
                   );
                 })
               ) : (
-                <div className="empty-state">
-                  <h3>No completed {competition === "CL" ? "Champions League" : "Premier League"} rounds yet</h3>
-                  <p>A round gets archived here automatically once every fixture in it has been played.</p>
-                </div>
+                past.length === 0 && (
+                  <div className="empty-state">
+                    <h3>No completed {competition === "CL" ? "Champions League" : "Premier League"} rounds yet</h3>
+                    <p>Finished fixtures will land here as soon as they're checked; the round's accuracy badge appears once every fixture in it has been played.</p>
+                  </div>
+                )
               )}
             </>
           )}
@@ -616,7 +623,7 @@ export default function Home() {
             <div className="how">
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
-              <p>Each match card leads with "Our Prediction" — not a 6th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (Forebet, SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Each match card leads with "Our Prediction" — not a 5th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
               <p>Premier League and Champions League fixtures get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends.</p>
               <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
               <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
