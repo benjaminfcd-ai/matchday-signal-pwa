@@ -232,7 +232,14 @@ function MatchCard({ m, open, onToggle }) {
 }
 
 function Hero({ matches }) {
-  const candidates = matches.filter((m) => m.status !== "finished" || m.probs.length);
+  // Highlights are for what's still to come. A finished match keeps its
+  // probs untouched (see finalizeFinishedFixtures in scraper/run.js — only
+  // status/score/standout change), so without the status check here a
+  // striking reading from an already-played game would keep showing as
+  // "Highest single reading" long after the result is known. Requiring
+  // m.probs.length too just rules out untouched "Not yet analyzed"
+  // placeholders, which couldn't produce a reading anyway.
+  const candidates = matches.filter((m) => m.status !== "finished" && m.probs.length);
   // "Most agreed-upon" — m.agreement === "good" already means every source
   // checked favored the same side with decent average confidence (see
   // scraper/lib/agreement.js), so this needs no extra unanimity flag.
