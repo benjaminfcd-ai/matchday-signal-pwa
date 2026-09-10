@@ -71,11 +71,17 @@ export const TEAM_ALIASES = {
   "Bodo/Glimt": ["Bodo/Glimt", "Bodø/Glimt", "FK Bodø/Glimt"],
   "Copenhagen": ["Copenhagen", "FC København", "FC Copenhagen"],
   "Qarabag": ["Qarabag", "Qarabağ", "Qarabag FK"],
+  "AS Roma": ["Roma", "AS Roma"],
+  "Como": ["Como", "Como 1907"],
 };
 
 const FLAT_ALIASES = Object.entries(TEAM_ALIASES).flatMap(([canonical, names]) =>
   names.map((n) => [n.toLowerCase(), canonical])
 );
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // Resolve any spelling/short-name of a club to its canonical name, or return
 // the input unchanged if unrecognized (better to keep an unrecognized name
@@ -88,7 +94,21 @@ export function canonicalTeam(name) {
   const lower = stripped.toLowerCase();
   const exact = FLAT_ALIASES.find(([alias]) => alias === lower);
   if (exact) return exact[1];
-  const partial = FLAT_ALIASES.find(([alias]) => lower.includes(alias) || alias.includes(lower));
+  // Fallback for a name that isn't an exact alias match but clearly contains
+  // (or is contained by) one — e.g. a source sending "Hotspur" alone should
+  // still resolve via the "Tottenham Hotspur" alias. This MUST be checked on
+  // whole-word boundaries, never as a raw substring: a plain .includes() once
+  // matched "AS Roma" and "Como" to Marseille's short alias "OM", purely
+  // because "om" happens to appear inside the letters "r-om-a" / "c-om-o" —
+  // and would do the same to "Villarreal" via Aston Villa's "Villa" alias.
+  // \b anchors the match to real word edges so a short alias can only match
+  // a real standalone word/phrase, not a coincidental run of letters inside
+  // an unrelated club name.
+  const partial = FLAT_ALIASES.find(([alias]) => {
+    const aliasInName = new RegExp(`\\b${escapeRegExp(alias)}\\b`, "i").test(lower);
+    const nameInAlias = new RegExp(`\\b${escapeRegExp(lower)}\\b`, "i").test(alias);
+    return aliasInName || nameInAlias;
+  });
   return partial ? partial[1] : stripped;
 }
 
