@@ -28,6 +28,14 @@
 // real run's logs (a "[elo] no working ClubElo slug for X" warning means
 // every candidate for that club failed; check clubelo.com directly for its
 // real slug and add it to the candidates list below).
+//
+// That warning line now also prints WHY each candidate slug failed (an HTTP
+// status, a network error, or an unexpected response body) rather than just
+// "no working slug" — see fetchLatestEloForSlug below. That distinction
+// matters: a slug that's clearly correct (e.g. "Arsenal") failing with an
+// HTTP status or network error points at ClubElo being unreachable or
+// blocking this scraper altogether, not at a wrong name guess — while a 404
+// on an unusual slug just means try a different candidate.
 const ELO_NAME_CANDIDATES = {
   "Arsenal": ["Arsenal"],
   "Aston Villa": ["AstonVilla", "Aston"],
@@ -99,19 +107,38 @@ const ELO_NAME_CANDIDATES = {
 
 const eloCache = new Map(); // slug candidates key -> elo number, per run.js process
 
+// Returns { ok: true, elo } on success or { ok: false, reason } on any
+// failure — never throws. Distinguishing WHY a slug failed (network error vs
+// HTTP status vs an unparseable/empty body) is the whole point: it's what
+// lets fetchLatestElo's warning below tell a genuinely wrong slug guess
+// apart from ClubElo being unreachable or blocking this scraper entirely.
 async function fetchLatestEloForSlug(slug) {
   const url = `http://api.clubelo.com/${encodeURIComponent(slug)}`;
-  const res = await fetch(url, { headers: { "User-Agent": "matchday-signal-scraper/1.0" } });
-  if (!res.ok) return null;
+  let res;
+  try {
+    res = await fetch(url, { headers: { "User-Agent": "matchday-signal-scraper/1.0" } });
+  } catch (err) {
+    return { ok: false, reason: `network error (${err?.message || err})` };
+  }
+  if (!res.ok) {
+    return { ok: false, reason: `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}` };
+  }
   const csv = (await res.text()).trim();
   const lines = csv.split("\n").filter(Boolean);
-  if (lines.length < 2) return null;
+  if (lines.length < 2) {
+    return { ok: false, reason: `empty or unexpected response body (${lines.length} line(s))` };
+  }
   const header = lines[0].split(",");
   const eloIdx = header.indexOf("Elo");
-  if (eloIdx === -1) return null;
+  if (eloIdx === -1) {
+    return { ok: false, reason: `no "Elo" column in response header ("${header.join(",")}")` };
+  }
   const last = lines[lines.length - 1].split(",");
   const elo = parseFloat(last[eloIdx]);
-  return Number.isFinite(elo) ? elo : null;
+  if (!Number.isFinite(elo)) {
+    return { ok: false, reason: `could not parse a numeric Elo value from the last row` };
+  }
+  return { ok: true, elo };
 }
 
 async function fetchLatestElo(teamName) {
@@ -123,18 +150,16 @@ async function fetchLatestElo(teamName) {
   const cacheKey = teamName;
   if (eloCache.has(cacheKey)) return eloCache.get(cacheKey);
 
+  const failures = [];
   for (const slug of candidates) {
-    try {
-      const elo = await fetchLatestEloForSlug(slug);
-      if (elo != null) {
-        eloCache.set(cacheKey, elo);
-        return elo;
-      }
-    } catch {
-      // try the next candidate slug
+    const result = await fetchLatestEloForSlug(slug);
+    if (result.ok) {
+      eloCache.set(cacheKey, result.elo);
+      return result.elo;
     }
+    failures.push(`${slug} → ${result.reason}`);
   }
-  console.warn(`[elo] no working ClubElo slug for "${teamName}" (tried: ${candidates.join(", ")})`);
+  console.warn(`[elo] no working ClubElo slug for "${teamName}": ${failures.join("; ")}`);
   eloCache.set(cacheKey, null);
   return null;
 }
