@@ -1,10 +1,9 @@
 // Club Elo (clubelo.com) — a well-established, independently maintained Elo
-// rating system for club football, published as a plain CSV API (no login,
-// no bot protection — it's built for programmatic use, unlike the sites
-// this project scrapes). This module is different from the others: instead
-// of reading someone else's published prediction, it fetches raw Elo
-// ratings and CALCULATES a win/draw/loss prediction from them — real
-// probability math, not a number lifted off a page.
+// rating system for club football. This module is different from the other
+// three prediction sources: instead of reading someone else's published
+// prediction, it fetches a club's current Elo rating and CALCULATES a
+// win/draw/loss prediction from it — real probability math, not a number
+// lifted off a page.
 //
 // Method (standard, publicly documented, not proprietary): the Elo
 // win-expectancy formula (the same one used across chess/sports Elo
@@ -21,6 +20,22 @@
 // This is an estimate either way — treat it as one more independent read
 // alongside Opta/Wincomparator/SoccerVista/the goals model, not a ground truth.
 //
+// WHERE THE RATING COMES FROM: this used to hit ClubElo's plain-CSV API at
+// api.clubelo.com/<slug>, a lightweight raw HTTP fetch. As of September
+// 2026 that specific endpoint started failing (HTTP 502, confirmed both
+// from the GitHub Actions runner and from a real browser — clubelo.com's
+// own website was unaffected the whole time, so this was ClubElo's API
+// backend for that route specifically, not the site or the service as a
+// whole). This module now instead loads a club's normal page on the public
+// website — https://clubelo.com/<slug> — with Playwright (same withPage()
+// pattern already used by opta.js/wincomparator.js/soccervista.js) and reads
+// the "Elo: NNNN" line that page displays near the top for the club. Same
+// slug scheme, same candidate-fallback approach, same "never fabricate"
+// behavior — just a different transport now that the CSV route is down. If
+// ClubElo ever brings that API back, this module doesn't need it back: the
+// website route confirmed to cover the same clubs (and then some — it goes
+// all the way down England's league pyramid, not just the CSV's top flight).
+//
 // NOTE ON TEAM NAME SLUGS: ClubElo's per-club URLs use their own short
 // slugs (e.g. "ManCity", not "Manchester City"). The mapping below is a
 // best-effort guess at those slugs with a couple of fallback candidates per
@@ -29,13 +44,15 @@
 // every candidate for that club failed; check clubelo.com directly for its
 // real slug and add it to the candidates list below).
 //
-// That warning line now also prints WHY each candidate slug failed (an HTTP
-// status, a network error, or an unexpected response body) rather than just
-// "no working slug" — see fetchLatestEloForSlug below. That distinction
-// matters: a slug that's clearly correct (e.g. "Arsenal") failing with an
-// HTTP status or network error points at ClubElo being unreachable or
-// blocking this scraper altogether, not at a wrong name guess — while a 404
-// on an unusual slug just means try a different candidate.
+// That warning line also prints WHY each candidate slug failed (a page-load
+// error, an HTTP status, or no "Elo:" line found in the page) rather than
+// just "no working slug" — see fetchLatestEloForSlug below. That distinction
+// matters: a slug that's clearly correct (e.g. "Arsenal") failing to load at
+// all points at ClubElo being unreachable or blocking this scraper
+// altogether, not at a wrong name guess — while a page that loads fine but
+// has no "Elo:" line just means try a different candidate slug.
+import { withPage } from "../browser.js";
+
 const ELO_NAME_CANDIDATES = {
   "Arsenal": ["Arsenal"],
   "Aston Villa": ["AstonVilla", "Aston"],
@@ -103,42 +120,54 @@ const ELO_NAME_CANDIDATES = {
   "Bodo/Glimt": ["BodoGlimt"],
   "Copenhagen": ["FCCopenhagen", "Copenhagen"],
   "Qarabag": ["Qarabag"],
+  // Sabah FK (Man Utd's 2026-27 UCL opponent) doesn't have a confirmed
+  // ClubElo slug yet — left out deliberately rather than guessed. If it
+  // shows up in "[elo] no ClubElo slug candidates configured" logs, check
+  // clubelo.com directly for its real slug and add it here.
 };
 
 const eloCache = new Map(); // slug candidates key -> elo number, per run.js process
 
+// The club's page opens with a line like:
+//   Elo: 2039 (Best: 2045, reached on 2026-03-07), Golo: 1.0
+// This matches just the "Elo: NNNN" part — deliberately anchored on the
+// colon so it can't accidentally match the "Elo" column header that shows
+// up elsewhere on the same page (the ranking table, the calculation log).
+const ELO_LINE_RE = /Elo:\s*(\d+(?:\.\d+)?)/;
+
 // Returns { ok: true, elo } on success or { ok: false, reason } on any
-// failure — never throws. Distinguishing WHY a slug failed (network error vs
-// HTTP status vs an unparseable/empty body) is the whole point: it's what
-// lets fetchLatestElo's warning below tell a genuinely wrong slug guess
-// apart from ClubElo being unreachable or blocking this scraper entirely.
+// failure — never throws. Distinguishing WHY a slug failed (page-load
+// error vs HTTP status vs no matching "Elo:" line) is the whole point: it's
+// what lets fetchLatestElo's warning below tell a genuinely wrong slug
+// guess apart from ClubElo being unreachable or blocking this scraper
+// entirely.
 async function fetchLatestEloForSlug(slug) {
-  const url = `http://api.clubelo.com/${encodeURIComponent(slug)}`;
-  let res;
+  const url = `https://clubelo.com/${encodeURIComponent(slug)}`;
   try {
-    res = await fetch(url, { headers: { "User-Agent": "matchday-signal-scraper/1.0" } });
+    return await withPage(async (page) => {
+      let res;
+      try {
+        res = await page.goto(url, { waitUntil: "networkidle", timeout: 45000 });
+      } catch (err) {
+        return { ok: false, reason: `page load failed (${err?.message || err})` };
+      }
+      if (res && !res.ok()) {
+        return { ok: false, reason: `HTTP ${res.status()}` };
+      }
+      const text = await page.innerText("body");
+      const match = text.match(ELO_LINE_RE);
+      if (!match) {
+        return { ok: false, reason: `no "Elo:" line found on the page` };
+      }
+      const elo = parseFloat(match[1]);
+      if (!Number.isFinite(elo)) {
+        return { ok: false, reason: `could not parse a numeric Elo value from "${match[0]}"` };
+      }
+      return { ok: true, elo };
+    });
   } catch (err) {
     return { ok: false, reason: `network error (${err?.message || err})` };
   }
-  if (!res.ok) {
-    return { ok: false, reason: `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}` };
-  }
-  const csv = (await res.text()).trim();
-  const lines = csv.split("\n").filter(Boolean);
-  if (lines.length < 2) {
-    return { ok: false, reason: `empty or unexpected response body (${lines.length} line(s))` };
-  }
-  const header = lines[0].split(",");
-  const eloIdx = header.indexOf("Elo");
-  if (eloIdx === -1) {
-    return { ok: false, reason: `no "Elo" column in response header ("${header.join(",")}")` };
-  }
-  const last = lines[lines.length - 1].split(",");
-  const elo = parseFloat(last[eloIdx]);
-  if (!Number.isFinite(elo)) {
-    return { ok: false, reason: `could not parse a numeric Elo value from the last row` };
-  }
-  return { ok: true, elo };
 }
 
 async function fetchLatestElo(teamName) {
@@ -210,7 +239,7 @@ export async function fetchEloPrediction(home, away) {
     return {
       prob: {
         source: "Club Elo (calculated)",
-        url: "http://clubelo.com/",
+        url: "https://clubelo.com/",
         home: calc.winProb.home,
         draw: calc.winProb.draw,
         away: calc.winProb.away,
