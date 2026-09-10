@@ -120,6 +120,8 @@ const ELO_NAME_CANDIDATES = {
   "Bodo/Glimt": ["BodoGlimt"],
   "Copenhagen": ["FCCopenhagen", "Copenhagen"],
   "Qarabag": ["Qarabag"],
+  "AS Roma": ["Roma", "ASRoma"],
+  "Como": ["Como", "Como1907"],
   // Sabah FK (Man Utd's 2026-27 UCL opponent) doesn't have a confirmed
   // ClubElo slug yet — left out deliberately rather than guessed. If it
   // shows up in "[elo] no ClubElo slug candidates configured" logs, check
