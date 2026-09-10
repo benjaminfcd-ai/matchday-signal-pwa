@@ -77,6 +77,12 @@ function rowToMatch(r) {
 function metaId(competition) {
   return competition === "PL" ? "status" : `status_${competition}`;
 }
+// Same pattern as metaId(), for the standings table — see scraper/run.js's
+// standings refresh step. Premier League keeps its original "current" row
+// id untouched; Champions League gets its own row at "current_CL".
+function standingsId(competition) {
+  return competition === "PL" ? "current" : `current_${competition}`;
+}
 const COMPETITIONS = [
   { id: "PL", label: "Premier League" },
   { id: "CL", label: "Champions League" },
@@ -279,23 +285,36 @@ function Hero({ matches }) {
 // Position bands are the standard EPL convention this season: top 4 into the
 // Champions League, 5th into the Europa League, bottom 3 relegated. Purely a
 // visual cue — the numbers themselves come straight from football-data.org.
-function zoneClass(position) {
+function plZoneClass(position) {
   if (position <= 4) return "ucl";
   if (position === 5) return "uel";
   if (position >= 18) return "rel";
   return "";
 }
 
-function StandingsTable({ standings }) {
+// Champions League's 36-team league-phase table (since the 2024/25 reform):
+// the top 8 go straight through to the Round of 16, 9th-24th get a
+// two-legged playoff round for the remaining knockout spots, and 25th-36th
+// are eliminated from Europe entirely. Confirmed against current UEFA
+// coverage of the format — not guessed, per this project's hard rule.
+function clZoneClass(position) {
+  if (position <= 8) return "r16";
+  if (position <= 24) return "playoff";
+  return "out";
+}
+
+function StandingsTable({ standings, competition }) {
   const rows = standings?.rows || [];
+  const compLabel = competition === "CL" ? "Champions League" : "Premier League";
   if (!rows.length) {
     return (
       <div className="empty-state">
-        <h3>Table not available yet</h3>
+        <h3>{compLabel} table not available yet</h3>
         <p>The league table is refreshed on the same schedule as predictions — check back shortly.</p>
       </div>
     );
   }
+  const zoneClass = competition === "CL" ? clZoneClass : plZoneClass;
   return (
     <div className="table-wrap">
       <table className="standings">
@@ -329,11 +348,19 @@ function StandingsTable({ standings }) {
           ))}
         </tbody>
       </table>
-      <div className="table-legend">
-        <span><span className="zone-swatch ucl" />Champions League</span>
-        <span><span className="zone-swatch uel" />Europa League</span>
-        <span><span className="zone-swatch rel" />Relegation</span>
-      </div>
+      {competition === "CL" ? (
+        <div className="table-legend">
+          <span><span className="zone-swatch r16" />Round of 16 (direct)</span>
+          <span><span className="zone-swatch playoff" />Playoff round</span>
+          <span><span className="zone-swatch out" />Eliminated</span>
+        </div>
+      ) : (
+        <div className="table-legend">
+          <span><span className="zone-swatch ucl" />Champions League</span>
+          <span><span className="zone-swatch uel" />Europa League</span>
+          <span><span className="zone-swatch rel" />Relegation</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -344,26 +371,27 @@ export default function Home() {
   const [metaRows, setMetaRows] = useState([]); // both competitions' meta rows — pick the active one when rendering
   const [matches, setMatches] = useState([]);
   const [archived, setArchived] = useState([]);
-  const [standings, setStandings] = useState(null);
+  const [standingsRows, setStandingsRows] = useState([]); // both competitions' standings rows — pick the active one when rendering
   const [openId, setOpenId] = useState(null);
   const [connected, setConnected] = useState(false);
   const [selectedDay, setSelectedDay] = useState(null); // null = "All"; task 1a — day tabs on Upcoming
 
   const loadAll = useCallback(async () => {
     if (!supabase) return;
-    // meta is fetched without an id filter so both the Premier League
-    // ("status") and Champions League ("status_CL") rows come back at
-    // once — the toggle below just picks which one to show, no refetch.
-    const [{ data: metaData }, { data: matchRows }, { data: archRows }, { data: standingsRow }] = await Promise.all([
+    // meta and standings are both fetched without an id filter so both the
+    // Premier League ("status" / "current") and Champions League
+    // ("status_CL" / "current_CL") rows come back at once — the toggle
+    // below just picks which one to show, no refetch.
+    const [{ data: metaData }, { data: matchRows }, { data: archRows }, { data: standingsData }] = await Promise.all([
       supabase.from("meta").select("*"),
       supabase.from("matches").select("*"),
       supabase.from("archived_rounds").select("*").order("archived_at", { ascending: false }),
-      supabase.from("standings").select("*").eq("id", "current").maybeSingle(),
+      supabase.from("standings").select("*"),
     ]);
     if (metaData) setMetaRows(metaData);
     if (matchRows) setMatches(matchRows.map(rowToMatch));
     if (archRows) setArchived(archRows);
-    if (standingsRow) setStandings(standingsRow);
+    if (standingsData) setStandingsRows(standingsData);
     setConnected(true);
   }, []);
 
@@ -390,6 +418,13 @@ export default function Home() {
     const row = metaRows.find((r) => r.id === metaId(competition));
     return row || { round_label: COMPETITIONS.find((c) => c.id === competition)?.label || competition, last_updated: null };
   }, [metaRows, competition]);
+
+  // "Table" view shows one competition's standings at a time — same toggle,
+  // no refetch, since standingsRows already holds both.
+  const standings = useMemo(
+    () => standingsRows.find((r) => r.id === standingsId(competition)) || null,
+    [standingsRows, competition]
+  );
 
   const sorted = useMemo(
     () => compMatches.slice().sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal)),
@@ -605,9 +640,22 @@ export default function Home() {
 
           {view === "table" && (
             <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="topbar">
                 <div>
-                  <h1>Premier League table</h1>
+                  <h1>{competition === "CL" ? "Champions League table" : "Premier League table"}</h1>
                   <div className="sub">
                     {standings?.updated_at
                       ? fmtStamp(standings.updated_at)
@@ -615,7 +663,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <StandingsTable standings={standings} />
+              <StandingsTable standings={standings} competition={competition} />
             </>
           )}
 
