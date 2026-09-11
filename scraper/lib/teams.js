@@ -73,6 +73,11 @@ export const TEAM_ALIASES = {
   "Qarabag": ["Qarabag", "Qarabağ", "Qarabag FK"],
   "AS Roma": ["Roma", "AS Roma"],
   "Como": ["Como", "Como 1907"],
+  "Villarreal": ["Villarreal", "Villarreal CF"],
+  "Real Betis": ["Real Betis", "Real Betis Balompié", "Betis"],
+  "Lille": ["Lille", "Lille OSC"],
+  "AEK Athens": ["AEK Athens", "PAE AEK", "AEK"],
+  "LASK": ["LASK", "LASK Linz"],
 };
 
 const FLAT_ALIASES = Object.entries(TEAM_ALIASES).flatMap(([canonical, names]) =>
