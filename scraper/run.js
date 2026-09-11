@@ -105,10 +105,26 @@ function placeholderFixture(f) {
 // id -> fixture map works for both at once.
 async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
   const byId = new Map(seasonFixtures.map((f) => [f.id, f]));
+  // Fallback index for a row whose id no longer matches any freshly-fetched
+  // fixture — e.g. a team-name/alias correction (like the "AS Roma"/"Como"
+  // fix on 2026-09-10) changes the derived id text even though it's still
+  // the exact same real-world match, silently orphaning the row from the
+  // by-id lookup above forever. Kickoff time doesn't depend on spelling, so
+  // it's a far more stable anchor: keyed by (competition, exact kickoff
+  // timestamp), and only used when it resolves to exactly ONE fixture — a
+  // genuine same-time kickoff collision (several matches at once) is left
+  // alone rather than risk finalizing the wrong one.
+  const byKickoff = new Map();
+  for (const f of seasonFixtures) {
+    const key = `${f.competition}|${f.kickoffLocal}`;
+    byKickoff.set(key, byKickoff.has(key) ? undefined : f); // undefined marks a collision
+  }
+
   const updates = [];
+  const stillUnresolved = [];
   for (const row of currentRows) {
     if (row.status === "finished") continue;
-    const fresh = byId.get(row.id);
+    const fresh = byId.get(row.id) || byKickoff.get(`${row.competition}|${row.kickoff_local}`);
     if (fresh && fresh.status === "finished") {
       updates.push({
         ...row,
@@ -117,12 +133,26 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
         standout: { market: "—", pick: `Match complete — ${fresh.score}`, pct: null, source: null, note: "Result recorded for round completeness." },
         updated_at: new Date().toISOString(),
       });
+    } else if (hoursUntil(row.kickoff_local) < -3) {
+      // Kickoff was more than 3 hours ago and this row still can't be
+      // resolved to a finished fixture by either id or kickoff time —
+      // flag it instead of failing silently, so a fixture stuck showing
+      // "Live" on the site has a matching line in these logs to
+      // investigate (either football-data.org hasn't marked it FINISHED
+      // yet, or it's genuinely dropped out of the fetched fixture list).
+      stillUnresolved.push(`${row.home} vs ${row.away} (${row.competition}, id=${row.id}, kickoff=${row.kickoff_local})`);
     }
   }
   if (updates.length) {
     const { error } = await supabaseAdmin.from("matches").upsert(updates);
     if (error) throw error;
     console.log(`Finalized ${updates.length} finished fixture(s).`);
+  }
+  if (stillUnresolved.length) {
+    console.warn(
+      `${stillUnresolved.length} fixture(s) are well past kickoff but still not resolved to "finished":\n  ` +
+        stillUnresolved.join("\n  ")
+    );
   }
   return updates.map((u) => u.id);
 }
