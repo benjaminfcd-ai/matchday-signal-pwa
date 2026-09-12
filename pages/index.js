@@ -511,4 +511,196 @@ export default function Home() {
           <div className="legend">
             <div className="legend-title">Sources checked</div>
             <div className="legend-row"><span>Opta Analyst</span><span className="dim">win probability</span></div>
-            <div
+            <div className="legend-row"><span>Wincomparator</span><span className="dim">1X2 + goals</span></div>
+            <div className="legend-row"><span>SoccerVista</span><span className="dim">1X2 + goals</span></div>
+            <div className="legend-row"><span>Club Elo</span><span className="dim">win probability</span></div>
+          </div>
+          <div className="legend">
+            <div className="legend-row">
+              <span><span className="live-dot" /> {connected ? "Live" : "Connecting…"}</span>
+            </div>
+          </div>
+        </aside>
+
+        <main>
+          {view === "this" && (
+            <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="topbar">
+                <div>
+                  <h1>This round's signal</h1>
+                  <div className="sub">{meta.round_label}</div>
+                </div>
+                <div className="sync">
+                  <div className="stamp">{fmtStamp(meta.last_updated)}</div>
+                  <span className="status-pill"><span className="live-dot" />Auto-updating</span>
+                </div>
+              </div>
+
+              <Hero matches={compMatches} />
+
+              <div className="section-label">Upcoming — kickoff times in Ho Chi Minh City (ICT)</div>
+
+              {upcomingDays.length > 1 && (
+                <div className="day-tabs">
+                  <button
+                    type="button"
+                    className={`day-tab ${activeDay === null ? "active" : ""}`}
+                    onClick={() => setSelectedDay(null)}
+                  >
+                    All
+                  </button>
+                  {upcomingDays.map((d) => (
+                    <button
+                      type="button"
+                      key={d.key}
+                      className={`day-tab ${activeDay === d.key ? "active" : ""}`}
+                      onClick={() => setSelectedDay(d.key)}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="matches">
+                {visibleUpcoming.length ? (
+                  visibleUpcoming.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)
+                ) : (
+                  <div className="empty-state">
+                    <p style={{ margin: 0 }}>No upcoming {competition === "CL" ? "Champions League" : "Premier League"} fixtures left in this round — check back once the next round is analyzed.</p>
+                  </div>
+                )}
+              </div>
+
+              <p className="footer-note">
+                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. As soon as a fixture is confirmed finished, it moves straight into the <b>Past rounds</b> tab — that round's accuracy percentage only appears there once every fixture in it has been played.
+              </p>
+              <p className="footer-note">
+                This site is a research tool, not betting advice — it doesn't encourage placing bets and makes no promise of accuracy or profit. Agreement between models is a signal, not a guarantee, about any specific match. If you choose to bet elsewhere, please only do so with money you can afford to lose.
+              </p>
+            </>
+          )}
+
+          {view === "past" && (
+            <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="topbar">
+                <div>
+                  <h1>Past rounds</h1>
+                  <div className="sub">Finished fixtures land here the moment they're checked — a round's accuracy only shows once every fixture in it has been played</div>
+                </div>
+              </div>
+
+              {past.length > 0 && (
+                <>
+                  <div className="section-label">{meta.round_label} — in progress ({past.length} of {sorted.length} played)</div>
+                  <div className="matches">
+                    {past.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
+                  </div>
+                  <p className="footer-note">This round isn't archived yet — its accuracy percentage will appear below once its last fixture is finished.</p>
+                </>
+              )}
+
+              {compArchived.length > 0 && past.length > 0 && (
+                <div className="section-label">Completed rounds</div>
+              )}
+
+              {compArchived.length > 0 ? (
+                compArchived.map((r) => {
+                  const { correct, graded } = computeRoundAccuracy(r.matches || []);
+                  const pct = graded ? Math.round((correct / graded) * 100) : null;
+                  const hideBadge = HIDE_ACCURACY_FOR_ROUNDS.has(r.round_label);
+                  return (
+                    <div className="archived-round" key={r.id}>
+                      <div>
+                        <div className="rtitle">{r.round_label}</div>
+                        <div className="rsub">{(r.matches || []).length} fixtures analyzed · archived {fmtStamp(r.archived_at).replace("Last analyzed ", "")}</div>
+                      </div>
+                      {pct != null && !hideBadge ? (
+                        <span className={`accuracy-chip ${pct > 50 ? "good" : "bad"}`}>{correct}/{graded} correct — {pct}%</span>
+                      ) : (
+                        <span className="accuracy-chip none">Not enough graded picks</span>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                past.length === 0 && (
+                  <div className="empty-state">
+                    <h3>No completed {competition === "CL" ? "Champions League" : "Premier League"} rounds yet</h3>
+                    <p>Finished fixtures will land here as soon as they're checked; the round's accuracy badge appears once every fixture in it has been played.</p>
+                  </div>
+                )
+              )}
+            </>
+          )}
+
+          {view === "table" && (
+            <>
+              <div className="comp-tabs">
+                {COMPETITIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className={`comp-tab ${competition === c.id ? "active" : ""}`}
+                    onClick={() => setCompetition(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="topbar">
+                <div>
+                  <h1>{competition === "CL" ? "Champions League table" : "Premier League table"}</h1>
+                  <div className="sub">
+                    {standings?.updated_at
+                      ? fmtStamp(standings.updated_at)
+                      : "Refreshed on the same schedule as predictions"}
+                  </div>
+                </div>
+              </div>
+              <StandingsTable standings={standings} competition={competition} />
+            </>
+          )}
+
+          {view === "how" && (
+            <div className="how">
+              <h3>How this works</h3>
+              <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
+              <p>Each match card leads with "Our Prediction" — not a 5th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Premier League and Champions League fixtures get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends.</p>
+              <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
+              <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
+            </div>
+          )}
+        </main>
+      </div>
+    </>
+  );
+}
