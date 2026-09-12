@@ -205,6 +205,34 @@ async function ensureRoundExists(competition, seasonFixtures) {
     return false;
   }
 
+  // Guard against recreating a round whose real-world fixtures have ALL
+  // already kicked off. windowForCompetition() re-resolves to "the weekend/
+  // midweek window containing (or immediately preceding) now" — for the
+  // Fri-Sun and Mon-Thu windows this project uses, that same window keeps
+  // being returned for every "now" through the rest of that period, not
+  // just the moment the round was created. So the instant `matches` is
+  // empty for a competition for ANY reason while "now" still falls in that
+  // same period — the normal case right after archiveIfComplete() retires a
+  // finished round, or an out-of-band cleanup like a manual archived_rounds
+  // deletion — this function would otherwise recreate the exact same,
+  // already-concluded round from scratch as blank "Not yet analyzed"
+  // placeholders, which then immediately re-finalizes and re-archives on
+  // the next run or two, producing a fresh duplicate archived_rounds entry
+  // every single cycle until the calendar finally rolls into a genuinely
+  // new window. A round where every fixture has already kicked off has
+  // nothing "upcoming" left to track, so there's nothing worth creating —
+  // skip it and simply wait for a window with real upcoming fixtures.
+  const nowMs = nowIct().getTime();
+  const allAlreadyKickedOff = windowFixtures.every((f) => new Date(f.kickoffLocal).getTime() < nowMs);
+  if (allAlreadyKickedOff) {
+    console.warn(
+      `${competitionLabel(competition)}: every fixture in the current window has already kicked off — ` +
+        `this would just recreate an already-concluded round. Skipping; will check again next run once the ` +
+        `calendar rolls into a window with genuinely upcoming fixtures.`
+    );
+    return false;
+  }
+
   const rows = windowFixtures.map(placeholderFixture);
   const { error: upsertErr } = await supabaseAdmin.from("matches").upsert(rows);
   if (upsertErr) throw upsertErr;
