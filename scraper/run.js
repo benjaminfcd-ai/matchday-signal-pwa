@@ -157,16 +157,32 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
   return updates.map((u) => u.id);
 }
 
-// Archives the previous round for THIS competition (if one exists) and
-// creates the next one from its coming window (weekend for PL, midweek for
-// CL), as soon as the current round for this competition is either empty
-// or entirely in the past. Every fixture starts as a placeholder — research
-// happens later, per-fixture, once each one enters its own
-// RESEARCH_WINDOW_HOURS window (see main()). Safe to call on every run:
-// it's a no-op whenever a round for this competition is already in
-// progress. Filters everything by `competition` so a PL and a CL round can
-// live in the matches table at the same time without interfering with each
-// other.
+// Creates the next round for THIS competition from its coming window
+// (weekend for PL, midweek for CL), but ONLY once the table is genuinely
+// empty for that competition — i.e. after archiveIfComplete() has already
+// retired the previous round because every fixture in it actually finished.
+// Every fixture starts as a placeholder — research happens later,
+// per-fixture, once each one enters its own RESEARCH_WINDOW_HOURS window
+// (see main()). Filters everything by `competition` so a PL and a CL round
+// can live in the matches table at the same time without interfering with
+// each other.
+//
+// IMPORTANT: this function used to also archive-and-recreate a round on its
+// own whenever every row's kickoff time had passed ("allPast"), regardless
+// of whether those fixtures were actually marked "finished". That was a
+// bug, not a safety net: a fixture can be past kickoff but still
+// "upcoming" for a while (football-data.org hasn't posted FINISHED yet, or
+// finalizeFinishedFixtures() hasn't matched it this run) — and "now" can
+// still fall inside the SAME weekend/midweek window as those very
+// fixtures, so the "next" round computed here was actually identical to
+// the one just deleted. The result was a destructive reset-and-rebuild
+// loop, once per run: it wiped every in-progress row back to a blank
+// "Not yet analyzed" placeholder (which is why finished-looking matches
+// kept showing "Live" forever) and created a fresh duplicate
+// archived_rounds entry each time. Round retirement is now handled
+// EXCLUSIVELY by archiveIfComplete() (step 4 in main()), which only
+// archives once every fixture's status is actually "finished" — this
+// function only ever creates, never archives.
 async function ensureRoundExists(competition, seasonFixtures) {
   const { data: currentRows, error: readErr } = await supabaseAdmin
     .from("matches")
@@ -174,21 +190,8 @@ async function ensureRoundExists(competition, seasonFixtures) {
     .eq("competition", competition);
   if (readErr) throw readErr;
 
-  const allPast = currentRows.length > 0 && currentRows.every((r) => new Date(r.kickoff_local) < new Date());
-  if (currentRows.length > 0 && !allPast) {
-    return false; // a round is already in progress for this competition — nothing to do
-  }
-
   if (currentRows.length > 0) {
-    const { data: metaRow } = await supabaseAdmin.from("meta").select("*").eq("id", metaId(competition)).maybeSingle();
-    await supabaseAdmin.from("archived_rounds").insert({
-      round_label: metaRow?.round_label || competitionLabel(competition),
-      matches: currentRows,
-      competition,
-      archived_at: new Date().toISOString(),
-    });
-    await supabaseAdmin.from("matches").delete().eq("competition", competition);
-    console.log(`Archived ${currentRows.length} ${competitionLabel(competition)} fixture(s) from the previous round.`);
+    return false; // a round already exists for this competition — nothing to do, whether it's finished or not (archiveIfComplete handles retirement)
   }
 
   const { start, end } = windowForCompetition(competition, nowIct());
