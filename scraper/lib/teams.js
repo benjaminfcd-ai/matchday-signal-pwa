@@ -78,6 +78,65 @@ export const TEAM_ALIASES = {
   "Lille": ["Lille", "Lille OSC"],
   "AEK Athens": ["AEK Athens", "PAE AEK", "AEK"],
   "LASK": ["LASK", "LASK Linz"],
+
+  // Bundesliga — full 2026-27 season list (18 clubs), cross-checked against
+  // Wikipedia's 2026-27 Bundesliga season page and confirmed relegation/
+  // promotion reporting (Sept 2026). This season's promoted clubs are
+  // Schalke 04 (returning after 3 years out), SV Elversberg (first-ever
+  // top-flight promotion), and SC Paderborn (won the playoff vs Wolfsburg);
+  // Wolfsburg, Heidenheim and St. Pauli went the other way. Canonical
+  // spellings here are kept ASCII (no ö/ü) to match what football-data.org
+  // and the scraped English-language prediction sites consistently use —
+  // the umlaut/accented forms are listed as aliases so a source that DOES
+  // use them still resolves correctly. These same canonical strings are
+  // reused as ClubElo lookup keys in elo.js — keep the two files in sync if
+  // you ever rename an entry here.
+  "Bayern Munich": ["Bayern Munich", "Bayern München", "FC Bayern München", "Bayern", "FC Bayern"],
+  "Borussia Dortmund": ["Borussia Dortmund", "Dortmund", "BVB"],
+  "Bayer Leverkusen": ["Bayer Leverkusen", "Bayer 04 Leverkusen", "Leverkusen"],
+  "RB Leipzig": ["RB Leipzig", "Leipzig"],
+  "VfB Stuttgart": ["VfB Stuttgart", "Stuttgart"],
+  "TSG 1899 Hoffenheim": ["TSG 1899 Hoffenheim", "Hoffenheim", "TSG Hoffenheim"],
+  "SC Freiburg": ["SC Freiburg", "Freiburg"],
+  "1. FSV Mainz 05": ["1. FSV Mainz 05", "Mainz 05", "Mainz", "FSV Mainz 05"],
+  "FC Schalke 04": ["FC Schalke 04", "Schalke 04", "Schalke"],
+  "SV Elversberg": ["SV Elversberg", "Elversberg", "SV 07 Elversberg"],
+  "SC Paderborn 07": ["SC Paderborn 07", "SC Paderborn", "Paderborn"],
+  "1. FC Köln": ["1. FC Köln", "FC Köln", "Köln", "Cologne", "1. FC Koln", "Koln"],
+  "SV Werder Bremen": ["SV Werder Bremen", "Werder Bremen", "Werder", "Bremen"],
+  "Hamburger SV": ["Hamburger SV", "Hamburg", "HSV"],
+  "1. FC Union Berlin": ["1. FC Union Berlin", "Union Berlin", "Union"],
+  "FC Augsburg": ["FC Augsburg", "Augsburg"],
+  "Borussia Mönchengladbach": ["Borussia Mönchengladbach", "Borussia Monchengladbach", "Gladbach", "Borussia M'gladbach", "Mönchengladbach"],
+  "Eintracht Frankfurt": ["Eintracht Frankfurt", "Frankfurt", "Eintracht"],
+
+  // La Liga — full 2026-27 season list (20 clubs), same cross-checked
+  // sourcing as Bundesliga above. This season's promoted clubs are Racing
+  // Santander (Segunda champion, first top flight season since 2011-12),
+  // Deportivo de La Coruña (Segunda runner-up, back after 8 years out), and
+  // Málaga (playoff winner, back after relegation in 2017-18); Real
+  // Oviedo, Girona and RCD Mallorca went down. Same ASCII-canonical /
+  // accented-alias convention as above, and same "keep elo.js in sync"
+  // note. Real Madrid, Barcelona, Atletico Madrid, Real Betis, and
+  // Villarreal are NOT repeated here — they're already defined above in the
+  // Champions League block (same clubs, same canonical spelling already
+  // matches), so adding them again would just be a harmless-but-confusing
+  // duplicate key.
+  "Athletic Club": ["Athletic Club", "Athletic Bilbao", "Athletic"],
+  "Real Sociedad": ["Real Sociedad", "Real Sociedad de Fútbol", "La Real"],
+  "Sevilla": ["Sevilla", "Sevilla FC"],
+  "Valencia": ["Valencia", "Valencia CF"],
+  "Celta Vigo": ["Celta Vigo", "RC Celta de Vigo", "Celta", "RC Celta"],
+  "Osasuna": ["Osasuna", "CA Osasuna"],
+  "Getafe": ["Getafe", "Getafe CF"],
+  "Alaves": ["Alaves", "Deportivo Alavés", "Alavés"],
+  "Rayo Vallecano": ["Rayo Vallecano", "Rayo"],
+  "Espanyol": ["Espanyol", "RCD Espanyol", "RCD Espanyol de Barcelona"],
+  "Levante": ["Levante", "Levante UD"],
+  "Elche": ["Elche", "Elche CF"],
+  "Racing Santander": ["Racing Santander", "Racing de Santander", "Racing"],
+  "Deportivo La Coruna": ["Deportivo La Coruna", "Deportivo de La Coruña", "Deportivo La Coruña", "Deportivo", "RC Deportivo"],
+  "Malaga": ["Malaga", "Málaga", "Málaga CF", "Malaga CF"],
 };
 
 const FLAT_ALIASES = Object.entries(TEAM_ALIASES).flatMap(([canonical, names]) =>
