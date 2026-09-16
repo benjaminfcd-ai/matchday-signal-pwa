@@ -14,7 +14,7 @@ const API_BASE = "https://api.football-data.org/v4";
 // (confirmed: football-data.org's published free-tier competition list
 // includes the UEFA Champions League alongside the "big 5" domestic
 // leagues), so no second API key or paid plan is needed for CL support.
-const COMPETITION_CODES = { PL: "PL", CL: "CL" };
+const COMPETITION_CODES = { PL: "PL", CL: "CL", BL1: "BL1", PD: "PD" };
 
 function toIctIso(utcDateIso) {
   // utcDateIso is an ISO string with a Z, e.g. "2026-09-05T19:00:00Z".
@@ -35,12 +35,14 @@ function toIctIso(utcDateIso) {
  * the season — callers filter down to the window (weekend or midweek) they
  * care about.
  *
- * competition: "PL" (default, unchanged) or "CL". PL fixture IDs keep their
- * exact original format (slug + dateTag) — untouched, so existing rows
- * never change ID and never duplicate on upsert. CL fixtures get a "cl-"
- * prefix on that same slug so the two competitions' IDs can never collide,
- * even for a fixture that happens to share a slug (e.g. two same-named
- * clubs meeting on the same date in different competitions).
+ * competition: "PL" (default, unchanged), "CL", "BL1" (Bundesliga), or "PD"
+ * (La Liga). PL fixture IDs keep their exact original format (slug +
+ * dateTag) — untouched, so existing rows never change ID and never
+ * duplicate on upsert. Every other competition gets its own lowercase code
+ * as a prefix on that same slug (e.g. "cl-...", "bl1-...", "pd-...") so no
+ * two competitions' IDs can ever collide, even for a fixture that happens
+ * to share a slug (e.g. two same-named clubs meeting on the same date in
+ * different competitions).
  */
 export async function fetchSeasonFixtures(competition = "PL") {
   const token = process.env.FOOTBALL_DATA_TOKEN;
