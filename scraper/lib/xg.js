@@ -78,9 +78,12 @@ async function fetchTeamsData(seasonStartYear) {
 }
 
 // Sums each team's match-by-match history into season totals: xG for/
-// against and games played. Returns null (not a guess) if the page
+// against and games played. Used for the PREVIOUS season only, where a
+// single flat total is exactly what's needed — it's just an anchor prior
+// for the early-season blend in goalsModel.js, not something that needs
+// its own recency weighting. Returns null (not a guess) if the page
 // couldn't be fetched or parsed at all.
-function summarizeTeamsData(teamsData) {
+function summarizeTeamsDataAggregate(teamsData) {
   if (!teamsData) return null;
   const out = {};
   for (const team of Object.values(teamsData)) {
@@ -93,6 +96,37 @@ function summarizeTeamsData(teamsData) {
       xgAgainst += Number(g.xGA) || 0;
     }
     out[canon] = { xgFor, xgAgainst, games: history.length };
+  }
+  return out;
+}
+
+// Used for the CURRENT season instead: keeps each match's own date and
+// home/away flag rather than collapsing straight to one flat average, so
+// goalsModel.js can weight recent matches more heavily than early-season
+// ones and compute each team's home form separately from its away form
+// (see that file for why). Sorted oldest-first per team. Returns null if
+// the page couldn't be fetched at all.
+function summarizeTeamsDataDetailed(teamsData) {
+  if (!teamsData) return null;
+  const out = {};
+  for (const team of Object.values(teamsData)) {
+    const canon = canonicalTeam(team.title);
+    const history = team.history || [];
+    out[canon] = history
+      .map((g) => ({
+        date: g.date || null,
+        // Understat marks each match "h" (home) or "a" (away) for the team
+        // whose history this is. If this field is ever missing or comes
+        // back as something unexpected, the match is left OUT of the home/
+        // away split specifically (never guessed which venue it was) but
+        // still counts toward that team's overall recency-weighted rate —
+        // see venueStats() in goalsModel.js.
+        venue: g.h_a === "h" ? "home" : g.h_a === "a" ? "away" : null,
+        xgFor: Number(g.xG) || 0,
+        xgAgainst: Number(g.xGA) || 0,
+      }))
+      .filter((g) => g.date) // no date means it can't be ordered/weighted safely — drop it rather than guess its recency
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
   }
   return out;
 }
@@ -119,7 +153,11 @@ export async function fetchXgContext() {
     }),
   ]);
   return {
-    current: summarizeTeamsData(current),
-    previous: summarizeTeamsData(previous),
+    // Per-match detail (date + home/away + xG), so goalsModel.js can weight
+    // recent matches more heavily and split by venue.
+    current: summarizeTeamsDataDetailed(current),
+    // A flat season total — used only as a prior anchor, not something
+    // that needs recency weighting itself.
+    previous: summarizeTeamsDataAggregate(previous),
   };
 }
