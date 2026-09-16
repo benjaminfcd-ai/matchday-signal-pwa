@@ -16,6 +16,13 @@ import { withPage } from "../browser.js";
 const ARTICLE_URLS = {
   PL: "https://theanalyst.com/articles/premier-league-match-predictions",
   CL: "https://theanalyst.com/articles/uefa-champions-league-match-predictions-2026-27",
+  // Both confirmed loading directly (Sept 2026) with current-season content
+  // (Bundesliga's mentions this year's promoted clubs; La Liga's is dated
+  // Aug 2026 and mentions its own promoted clubs) — same yearly-slug pattern
+  // as the CL URL above, so these will likely need the same kind of one-line
+  // update at the start of a new season if the old URL stops resolving.
+  BL1: "https://theanalyst.com/articles/bundesliga-predictions-2026-27-opta-supercomputer",
+  PD: "https://theanalyst.com/articles/la-liga-predictions-2026-27-opta-supercomputer-projections",
 };
 
 export async function fetchOptaPrediction(home, away, competition = "PL") {
