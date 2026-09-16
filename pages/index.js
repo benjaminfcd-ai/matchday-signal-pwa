@@ -144,13 +144,19 @@ function ProbBars({ p, home, away }) {
   );
 }
 
-// Every source is still shown — nothing is hidden or dropped — but Opta and
-// Wincomparator are pulled out as the two featured reads (per the site's
-// stated flow: Our Prediction → Opta → Wincomparator → the rest), with any
-// remaining sources (SoccerVista, Club Elo, ...) tucked under a collapsed
-// "+N more sources" toggle so the card isn't a wall of equally-weighted
-// numbers. A fixture missing Opta or Wincomparator just skips that slot.
-const FEATURED_SOURCES = ["Opta Analyst", "Wincomparator"];
+// Every source is still shown — nothing is hidden or dropped — but Opta,
+// Wincomparator, and AI Research are pulled out as the featured reads (per
+// the site's stated flow: Our Prediction → Opta → Wincomparator → AI
+// Research → the rest), with any remaining sources (SoccerVista, Club
+// Elo, ...) tucked under a collapsed "+N more sources" toggle so the card
+// isn't a wall of equally-weighted numbers. A fixture missing any one of
+// these just skips that slot. AI Research is featured alongside the other
+// two named sources because it's the one that actually goes out and checks
+// a broad spread of sites for this fixture (see scraper/lib/predictions/
+// aiResearch.js) rather than reading one fixed page — its own "Sources
+// Checked" tag (under "Other signals" below) shows how many real sites it
+// found something on.
+const FEATURED_SOURCES = ["Opta Analyst", "Wincomparator", "AI Research (multi-source)"];
 
 function MatchCard({ m, open, onToggle }) {
   const isLive = m.status === "upcoming" && new Date(m.kickoffLocal).getTime() < Date.now();
@@ -213,7 +219,7 @@ function MatchCard({ m, open, onToggle }) {
               </div>
             ) : (
               others.length > 0 && (
-                <div className="prob-na">Opta and Wincomparator aren't published yet for this fixture — see sources below.</div>
+                <div className="prob-na">Opta, Wincomparator, and AI Research aren't published yet for this fixture — see sources below.</div>
               )
             )}
             {others.length > 0 && (
@@ -490,7 +496,7 @@ export default function Home() {
         <title>Premier League Signal — Match Predictions Compared</title>
         <meta
           name="description"
-          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Wincomparator, SoccerVista and Elo ratings, plus a self-built Poisson goals model. Auto-updated every 3 hours. No odds, no betting picks."
+          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Wincomparator, SoccerVista, Club Elo ratings, a self-calculated Elo rating, a form- and venue-aware Poisson goals model, and an AI research pass that checks a broad spread of sites per fixture. Auto-updated every 3 hours. No odds, no betting picks."
         />
       </Head>
       <div className="shell">
@@ -514,6 +520,9 @@ export default function Home() {
             <div className="legend-row"><span>Wincomparator</span><span className="dim">1X2 + goals</span></div>
             <div className="legend-row"><span>SoccerVista</span><span className="dim">1X2 + goals</span></div>
             <div className="legend-row"><span>Club Elo</span><span className="dim">win probability</span></div>
+            <div className="legend-row"><span>Our Elo</span><span className="dim">win probability, calculated</span></div>
+            <div className="legend-row"><span>Goals model</span><span className="dim">form + venue aware</span></div>
+            <div className="legend-row"><span>AI Research</span><span className="dim">~10 sites, synthesized</span></div>
           </div>
           <div className="legend">
             <div className="legend-row">
@@ -586,7 +595,7 @@ export default function Home() {
               </div>
 
               <p className="footer-note">
-                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. As soon as a fixture is confirmed finished, it moves straight into the <b>Past rounds</b> tab — that round's accuracy percentage only appears there once every fixture in it has been played.
+                This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. AI Research specifically checks in more often as kickoff nears — every 2 hours, once a fixture is within 6 hours of its own kickoff — since that's the window where team news and lineups actually change. As soon as a fixture is confirmed finished, it moves straight into the <b>Past rounds</b> tab — that round's accuracy percentage only appears there once every fixture in it has been played.
               </p>
               <p className="footer-note">
                 This site is a research tool, not betting advice — it doesn't encourage placing bets and makes no promise of accuracy or profit. Agreement between models is a signal, not a guarantee, about any specific match. If you choose to bet elsewhere, please only do so with money you can afford to lose.
@@ -693,9 +702,9 @@ export default function Home() {
             <div className="how">
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
-              <p>Each match card leads with "Our Prediction" — not a 5th model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst and Wincomparator are shown individually, with any remaining sources (SoccerVista, Club Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
+              <p>Each match card leads with "Our Prediction" — not one more model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst, Wincomparator, and AI Research are shown individually, with any remaining sources (SoccerVista, Club Elo, Our Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. AI Research is the one source that isn't reading a single fixed page — it's Claude, given live web search, checking a broad spread of independent sites for that specific fixture and synthesizing one honest reading, the same kind of research you'd get asking an AI assistant directly, just run automatically as part of every scrape (its "Sources Checked" tag under "Other signals" shows how many real sites it actually found something on). Our Elo is a second, independently-calculated Elo-style rating alongside Club Elo's — built entirely from this project's own recorded results rather than fetched from clubelo.com, so it starts from scratch each season and becomes a more meaningful read as more of the season is actually played. The Goals model behind Over/Under, Correct Score, and Handicap now weighs recent matches more than early-season ones and works out each team's own home form separately from its away form, instead of assuming every team gets the same generic home-advantage boost. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published or synthesized by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
               <p>Premier League and Champions League fixtures get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends.</p>
-              <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click.</p>
+              <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click. AI Research runs on its own tighter schedule on top of that: every 2 hours, once a fixture is within 6 hours of kickoff, since that's the window where team news and lineups actually firm up — every other source doesn't benefit from checking that often, so only AI Research's reading refreshes on that faster cadence.</p>
               <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
             </div>
           )}
