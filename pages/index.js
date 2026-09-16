@@ -101,6 +101,8 @@ function standingsId(competition) {
 const COMPETITIONS = [
   { id: "PL", label: "Premier League" },
   { id: "CL", label: "Champions League" },
+  { id: "BL1", label: "Bundesliga" },
+  { id: "PD", label: "La Liga" },
 ];
 
 // A small team badge — renders nothing (rather than a broken-image icon) for
@@ -331,9 +333,75 @@ function clZoneClass(position) {
   return "out";
 }
 
+// Bundesliga (18 clubs, 2026-27 season): top 4 into the Champions League,
+// 5th into the Europa League. 16th enters a two-legged relegation/
+// promotion playoff against 2.Bundesliga's 3rd-place side rather than being
+// automatically relegated — this reuses the same "rel" (danger) color as
+// 17th-18th rather than adding a fourth visual band, same level of
+// simplification this project already uses for the CL playoff-round band
+// above; it's a purely visual cue; the numbers themselves come from
+// football-data.org.
+function bundesligaZoneClass(position) {
+  if (position <= 4) return "ucl";
+  if (position === 5) return "uel";
+  if (position >= 16) return "rel";
+  return "";
+}
+
+// La Liga (20 clubs, 2026-27 season): top 4 into the Champions League,
+// 5th-6th into the Europa League (the exact 5th/6th vs Conference League
+// split shifts a little depending on cup winners, so this project keeps
+// the same simplified 3-band convention used everywhere else rather than
+// chasing that each season), bottom 3 relegated.
+function laLigaZoneClass(position) {
+  if (position <= 4) return "ucl";
+  if (position <= 6) return "uel";
+  if (position >= 18) return "rel";
+  return "";
+}
+
+// One config per competition: which zone-class function colors its rows,
+// and what that coloring means in the legend underneath the table. Central
+// place to add a fifth competition's table styling without touching
+// StandingsTable's own JSX.
+const STANDINGS_ZONE_CONFIG = {
+  PL: {
+    zoneClass: plZoneClass,
+    legend: [
+      { cls: "ucl", label: "Champions League" },
+      { cls: "uel", label: "Europa League" },
+      { cls: "rel", label: "Relegation" },
+    ],
+  },
+  CL: {
+    zoneClass: clZoneClass,
+    legend: [
+      { cls: "r16", label: "Round of 16 (direct)" },
+      { cls: "playoff", label: "Playoff round" },
+      { cls: "out", label: "Eliminated" },
+    ],
+  },
+  BL1: {
+    zoneClass: bundesligaZoneClass,
+    legend: [
+      { cls: "ucl", label: "Champions League" },
+      { cls: "uel", label: "Europa League" },
+      { cls: "rel", label: "Relegation / play-off" },
+    ],
+  },
+  PD: {
+    zoneClass: laLigaZoneClass,
+    legend: [
+      { cls: "ucl", label: "Champions League" },
+      { cls: "uel", label: "Europa League" },
+      { cls: "rel", label: "Relegation" },
+    ],
+  },
+};
+
 function StandingsTable({ standings, competition }) {
   const rows = standings?.rows || [];
-  const compLabel = competition === "CL" ? "Champions League" : "Premier League";
+  const compLabel = COMPETITIONS.find((c) => c.id === competition)?.label || competition;
   if (!rows.length) {
     return (
       <div className="empty-state">
@@ -342,7 +410,8 @@ function StandingsTable({ standings, competition }) {
       </div>
     );
   }
-  const zoneClass = competition === "CL" ? clZoneClass : plZoneClass;
+  const config = STANDINGS_ZONE_CONFIG[competition] || STANDINGS_ZONE_CONFIG.PL;
+  const zoneClass = config.zoneClass;
   return (
     <div className="table-wrap">
       <table className="standings">
@@ -376,40 +445,33 @@ function StandingsTable({ standings, competition }) {
           ))}
         </tbody>
       </table>
-      {competition === "CL" ? (
-        <div className="table-legend">
-          <span><span className="zone-swatch r16" />Round of 16 (direct)</span>
-          <span><span className="zone-swatch playoff" />Playoff round</span>
-          <span><span className="zone-swatch out" />Eliminated</span>
-        </div>
-      ) : (
-        <div className="table-legend">
-          <span><span className="zone-swatch ucl" />Champions League</span>
-          <span><span className="zone-swatch uel" />Europa League</span>
-          <span><span className="zone-swatch rel" />Relegation</span>
-        </div>
-      )}
+      <div className="table-legend">
+        {config.legend.map((item) => (
+          <span key={item.cls}><span className={`zone-swatch ${item.cls}`} />{item.label}</span>
+        ))}
+      </div>
     </div>
   );
 }
 
 export default function Home() {
   const [view, setView] = useState("this"); // this | past | table | how
-  const [competition, setCompetition] = useState("PL"); // PL | CL — toggle at the top of "This round's signal"
-  const [metaRows, setMetaRows] = useState([]); // both competitions' meta rows — pick the active one when rendering
+  const [competition, setCompetition] = useState("PL"); // PL | CL | BL1 | PD — toggle at the top of "This round's signal"
+  const [metaRows, setMetaRows] = useState([]); // every competition's meta rows — pick the active one when rendering
   const [matches, setMatches] = useState([]);
   const [archived, setArchived] = useState([]);
-  const [standingsRows, setStandingsRows] = useState([]); // both competitions' standings rows — pick the active one when rendering
+  const [standingsRows, setStandingsRows] = useState([]); // every competition's standings rows — pick the active one when rendering
   const [openId, setOpenId] = useState(null);
   const [connected, setConnected] = useState(false);
   const [selectedDay, setSelectedDay] = useState(null); // null = "All"; task 1a — day tabs on Upcoming
 
   const loadAll = useCallback(async () => {
     if (!supabase) return;
-    // meta and standings are both fetched without an id filter so both the
-    // Premier League ("status" / "current") and Champions League
-    // ("status_CL" / "current_CL") rows come back at once — the toggle
-    // below just picks which one to show, no refetch.
+    // meta and standings are both fetched without an id filter so every
+    // competition's row comes back at once — Premier League ("status" /
+    // "current") plus a "status_<CODE>" / "current_<CODE>" row per other
+    // competition (CL, BL1, PD) — the toggle below just picks which one to
+    // show, no refetch.
     const [{ data: metaData }, { data: matchRows }, { data: archRows }, { data: standingsData }] = await Promise.all([
       supabase.from("meta").select("*"),
       supabase.from("matches").select("*"),
@@ -446,6 +508,11 @@ export default function Home() {
     const row = metaRows.find((r) => r.id === metaId(competition));
     return row || { round_label: COMPETITIONS.find((c) => c.id === competition)?.label || competition, last_updated: null };
   }, [metaRows, competition]);
+
+  // The currently-selected competition's display name — used everywhere an
+  // empty-state or heading needs to name it, instead of a competition-by-
+  // competition ternary that would need a new branch for every league added.
+  const activeCompLabel = COMPETITIONS.find((c) => c.id === competition)?.label || competition;
 
   // "Table" view shows one competition's standings at a time — same toggle,
   // no refetch, since standingsRows already holds both.
@@ -496,7 +563,7 @@ export default function Home() {
         <title>Premier League Signal — Match Predictions Compared</title>
         <meta
           name="description"
-          content="Compare independent Premier League and Champions League match predictions from Opta Analyst, Wincomparator, SoccerVista, Club Elo ratings, a self-calculated Elo rating, a form- and venue-aware Poisson goals model, and an AI research pass that checks a broad spread of sites per fixture. Auto-updated every 3 hours. No odds, no betting picks."
+          content="Compare independent Premier League, Champions League, Bundesliga, and La Liga match predictions from Opta Analyst, Wincomparator, SoccerVista, Club Elo ratings, a self-calculated Elo rating, a form- and venue-aware Poisson goals model, and an AI research pass that checks a broad spread of sites per fixture. Auto-updated every 3 hours. No odds, no betting picks."
         />
       </Head>
       <div className="shell">
@@ -589,7 +656,7 @@ export default function Home() {
                   visibleUpcoming.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)
                 ) : (
                   <div className="empty-state">
-                    <p style={{ margin: 0 }}>No upcoming {competition === "CL" ? "Champions League" : "Premier League"} fixtures left in this round — check back once the next round is analyzed.</p>
+                    <p style={{ margin: 0 }}>No upcoming {activeCompLabel} fixtures left in this round — check back once the next round is analyzed.</p>
                   </div>
                 )}
               </div>
@@ -661,7 +728,7 @@ export default function Home() {
               ) : (
                 past.length === 0 && (
                   <div className="empty-state">
-                    <h3>No completed {competition === "CL" ? "Champions League" : "Premier League"} rounds yet</h3>
+                    <h3>No completed {activeCompLabel} rounds yet</h3>
                     <p>Finished fixtures will land here as soon as they're checked; the round's accuracy badge appears once every fixture in it has been played.</p>
                   </div>
                 )
@@ -686,7 +753,7 @@ export default function Home() {
 
               <div className="topbar">
                 <div>
-                  <h1>{competition === "CL" ? "Champions League table" : "Premier League table"}</h1>
+                  <h1>{activeCompLabel} table</h1>
                   <div className="sub">
                     {standings?.updated_at
                       ? fmtStamp(standings.updated_at)
@@ -703,7 +770,7 @@ export default function Home() {
               <h3>How this works</h3>
               <p>Each fixture is checked against several independent, methodology-transparent prediction models rather than a single "top pick" source — no individual site in this space has a verified, audited accuracy record, so agreement across models is treated as the meaningful signal, not any one source's claimed win rate.</p>
               <p>Each match card leads with "Our Prediction" — not one more model, but an honest consensus of whichever outcome the majority of that fixture's sources lean toward, and how many of them agree. Below it, Opta Analyst, Wincomparator, and AI Research are shown individually, with any remaining sources (SoccerVista, Club Elo, Our Elo) tucked under a "more sources" toggle so every number is still there, just not competing for attention. AI Research is the one source that isn't reading a single fixed page — it's Claude, given live web search, checking a broad spread of independent sites for that specific fixture and synthesizing one honest reading, the same kind of research you'd get asking an AI assistant directly, just run automatically as part of every scrape (its "Sources Checked" tag under "Other signals" shows how many real sites it actually found something on). Our Elo is a second, independently-calculated Elo-style rating alongside Club Elo's — built entirely from this project's own recorded results rather than fetched from clubelo.com, so it starts from scratch each season and becomes a more meaningful read as more of the season is actually played. The Goals model behind Over/Under, Correct Score, and Handicap now weighs recent matches more than early-season ones and works out each team's own home form separately from its away form, instead of assuming every team gets the same generic home-advantage boost. This page shows win/draw/loss probabilities and secondary markets (both-teams-to-score, over/under goals, correct score) exactly as published or synthesized by each source. It intentionally excludes betting odds, stakes, or "place a bet" actions — it's a research view, not a betting tool.</p>
-              <p>Premier League and Champions League fixtures get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends.</p>
+              <p>Premier League, Champions League, Bundesliga, and La Liga fixtures all get the exact same treatment, side by side under the toggle at the top of "This round's signal" — Champions League just runs on its own schedule, since its fixtures cluster midweek rather than on weekends; the other three all follow the same weekend-round schedule.</p>
               <p>A scheduled job (not this page) checks every fixture every 3 hours and researches it once it's within 12 hours of kickoff, writing results straight into the database this page reads from — so every open tab updates automatically, live, with nothing to click. AI Research runs on its own tighter schedule on top of that: every 2 hours, once a fixture is within 6 hours of kickoff, since that's the window where team news and lineups actually firm up — every other source doesn't benefit from checking that often, so only AI Research's reading refreshes on that faster cadence.</p>
               <p><b>Disclaimer:</b> this site does not encourage or facilitate betting in any way, and nothing on it is betting advice. Nothing here is a guarantee of accuracy or profit — model agreement is a signal about a match, not a certainty, and no source on this page (including this site itself) has a verified long-term accuracy record. If you choose to bet elsewhere, please do so only with money you can afford to lose, and stop if it stops being fun.</p>
             </div>
