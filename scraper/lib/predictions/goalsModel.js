@@ -34,6 +34,21 @@
 // Handicap line; Club Elo (elo.js) and Our Elo (ownElo.js) are left to do
 // what they're actually suited for — an independent win/draw/loss reading
 // from ratings, not goal totals.
+//
+// MULTI-LEAGUE (Sept 2026): this used to be Premier-League-only, with one
+// shared `leagueAvgGoals` number used both to shrink each team's rate
+// toward a sensible baseline AND to convert a matchup's relative strengths
+// back into an actual expected goal count. Different leagues score at
+// genuinely different rates (Bundesliga is a notably higher-scoring league
+// than the other two, historically) — averaging them all into one number
+// would quietly corrupt every league's predictions. So this now computes
+// EACH competition's stats entirely separately (its own league average, its
+// own per-team shrinkage), via computeStatsForCompetition() below, and
+// merges the results into one lookup keyed by team name — safe to merge
+// because every real fixture this model is ever asked about has both teams
+// in the SAME competition, and each team's strength entry below carries its
+// OWN competition's leagueAvgGoals baked in for computeGoalsPrediction() to
+// use, rather than relying on one shared top-level number.
 const PRIOR_GAMES = 4; // shrink this season's rate toward the prior below
 const VENUE_PRIOR_GAMES = 3; // shrink a team's home/away-specific rate toward its own overall rate
 const FORM_DECAY = 0.85; // each match back in time counts ~85% as much as the next-most-recent one
@@ -110,14 +125,15 @@ function normalizeEntries(xgEntries, goalsEntries) {
   };
 }
 
-// Builds each team's shrunk, venue-specific attack/defense strength
-// (relative to the league-average goals/team/game) from every FINISHED
-// match in the fetched season fixtures, blended with Understat's xG
-// context when available. `xgContext` is `{ current, previous }` from
-// xg.js — either can be null (Understat unreachable this run, or a
-// specific team missing from it), in which case that team's strength falls
-// back to real goals only, per the hard "never fabricate" rule.
-export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
+// Builds ONE competition's shrunk, venue-specific attack/defense strengths
+// (relative to THAT competition's own average goals/team/game) from every
+// FINISHED match in its season fixtures, blended with Understat's xG
+// context for that same competition when available. This is the same
+// calculation computeTeamGoalStats() always did — now just wrapped as a
+// per-competition helper so the multi-league version below can call it once
+// per league and merge the results (see the top-of-file comment for why
+// leagues can't just be pooled into one shared average).
+function computeStatsForCompetition(seasonFixtures, xgContext = {}) {
   const xgCurrent = xgContext.current || null;
   const xgPrevious = xgContext.previous || null;
 
@@ -156,7 +172,7 @@ export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
     const away = venueStats(entries, "away");
 
     // Prior: this team's own last-season xG rate when Understat has it,
-    // otherwise the league-average xG rate.
+    // otherwise this competition's league-average xG rate.
     const prevTeam = xgPrevious?.[team];
     const usingPreviousSeasonPrior = !!(prevTeam && prevTeam.games > 0);
     const priorAttack = usingPreviousSeasonPrior ? prevTeam.xgFor / prevTeam.games : leagueAvgXg;
@@ -183,6 +199,12 @@ export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
       homeDefense: shrunkHomeDefense / leagueAvgGoals,
       awayAttack: shrunkAwayAttack / leagueAvgGoals,
       awayDefense: shrunkAwayDefense / leagueAvgGoals,
+      // Carried on every team's own entry (not just returned once at the
+      // top level) so computeGoalsPrediction() can convert a matchup's
+      // relative strengths back into real expected goals using THIS
+      // competition's own average, even after every competition's teams
+      // have been merged into one flat lookup — see computeTeamGoalStats().
+      leagueAvgGoals,
       gamesPlayed: entries.length,
       usingXg,
       usingPreviousSeasonPrior,
@@ -192,6 +214,31 @@ export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
   return { strengths, leagueAvgGoals, teamsWithData: Object.keys(strengths).length };
 }
 
+// Builds attack/defense strengths across MULTIPLE competitions at once.
+// `fixturesByCompetition` and `xgContextByCompetition` are both objects
+// keyed by competition code (e.g. { PL: [...], BL1: [...], PD: [...] } and
+// { PL: {current,previous}, BL1: {...}, PD: {...} } — the exact shape
+// fetchXgContext() in xg.js now returns). Each competition is computed
+// entirely independently via computeStatsForCompetition() above, then
+// merged into one flat `strengths` lookup keyed by team name — safe
+// because a club only ever appears in one of these domestic leagues at a
+// time, so there's no risk of one competition's entry overwriting
+// another's for the same team.
+export function computeTeamGoalStats(fixturesByCompetition, xgContextByCompetition = {}) {
+  const strengths = {};
+  const byCompetition = {};
+  let teamsWithData = 0;
+
+  for (const [competition, seasonFixtures] of Object.entries(fixturesByCompetition || {})) {
+    const result = computeStatsForCompetition(seasonFixtures, xgContextByCompetition[competition] || {});
+    Object.assign(strengths, result.strengths);
+    teamsWithData += result.teamsWithData;
+    byCompetition[competition] = { leagueAvgGoals: result.leagueAvgGoals, teamsWithData: result.teamsWithData };
+  }
+
+  return { strengths, teamsWithData, byCompetition };
+}
+
 function poissonPmf(k, lambda) {
   let logP = -lambda + k * Math.log(lambda);
   for (let i = 2; i <= k; i++) logP -= Math.log(i);
@@ -199,15 +246,22 @@ function poissonPmf(k, lambda) {
 }
 
 export function computeGoalsPrediction(home, away, teamStrengths) {
-  const { strengths, leagueAvgGoals } = teamStrengths;
+  const { strengths } = teamStrengths;
   const h = strengths[home];
   const a = strengths[away];
   if (!h || !a) return null; // no finished-match data yet for one side — don't guess, per the hard rule
 
+  // Both teams in any real fixture this model is asked about belong to the
+  // SAME competition, so either side's own `leagueAvgGoals` is the right
+  // baseline here — using the home team's is an arbitrary but harmless
+  // choice (see computeStatsForCompetition() for where this value comes
+  // from and why it's carried per-team rather than as one shared number).
+  const leagueAvgGoals = h.leagueAvgGoals;
+
   // Each team's own home/away-specific attack and defense strength already
   // carries whatever real home-advantage (or lack of it) that team has
-  // shown this season — see computeTeamGoalStats — so no separate flat
-  // home-boost/away-dampen multiplier is applied here on top of it.
+  // shown this season — see computeStatsForCompetition() — so no separate
+  // flat home-boost/away-dampen multiplier is applied here on top of it.
   const homeExp = Math.max(0.3, leagueAvgGoals * h.homeAttack * a.awayDefense);
   const awayExp = Math.max(0.3, leagueAvgGoals * a.awayAttack * h.homeDefense);
 
