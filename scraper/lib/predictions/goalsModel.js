@@ -7,61 +7,131 @@
 // back to real goals scored/conceded from football-data.org instead —
 // never a guess, just a steadier real number.
 //
-// EARLY-SEASON PRIOR: with only a couple of games played, ANY per-game
-// rate is noisy — goals or xG. This blends each team's current-season rate
-// toward a PRIOR, weighted by PRIOR_GAMES worth of "pseudo-games" of that
-// prior. The prior itself is smarter than a flat league average: it's that
-// team's own final xG rate from LAST season when Understat has it (a
-// genuinely informative anchor — a team that concedes a lot tends to keep
-// doing so), falling back to the current league-average xG rate only for a
-// newly promoted team with no top-flight history to draw on.
+// TWO free, self-calculated refinements on top of that base signal — no new
+// scraping, no new API, just smarter use of data this project already
+// fetches every run:
+//
+// 1. RECENT FORM: a flat season-long average treats a game from August the
+//    same as one from last week, which misses real momentum (a team on a
+//    4-game unbeaten run plays differently than its season average
+//    suggests). Every per-team rate below is now a recency-weighted
+//    average — each match counts for FORM_DECAY times as much as the match
+//    right after it, so recent games matter more without a hard cutoff
+//    that throws older games away entirely (see weightedAverage()).
+//
+// 2. HOME/AWAY SPLITS: this used to apply one flat adjustment to every
+//    team — a fixed +12% home boost, -6% away dampen. Real clubs aren't
+//    uniform: some are genuinely stronger at home than away (or vice
+//    versa) by more or less than that. Each team's attack/defense rate is
+//    now computed separately for its home matches and its away matches
+//    (see venueStats()), shrunk toward that SAME team's own overall rate —
+//    with a small default home/away nudge built into that shrinkage prior
+//    so an early-season fixture (before a team has played enough of its
+//    own home or away games yet) still gets a sensible generic assumption,
+//    fading out on its own as real venue-specific data accumulates.
 //
 // This is what drives Over/Under, Correct Score, and the goal-based
-// Handicap line; Club Elo (elo.js) is left to do what it's actually suited
-// for — an independent win/draw/loss reading from ratings, not goal
-// totals.
-const PRIOR_GAMES = 4;
-const HOME_GOAL_BOOST = 1.12; // home teams score somewhat more than a neutral venue would suggest
-const AWAY_GOAL_DAMPEN = 0.94;
+// Handicap line; Club Elo (elo.js) and Our Elo (ownElo.js) are left to do
+// what they're actually suited for — an independent win/draw/loss reading
+// from ratings, not goal totals.
+const PRIOR_GAMES = 4; // shrink this season's rate toward the prior below
+const VENUE_PRIOR_GAMES = 3; // shrink a team's home/away-specific rate toward its own overall rate
+const FORM_DECAY = 0.85; // each match back in time counts ~85% as much as the next-most-recent one
+const DEFAULT_HOME_ATTACK_FACTOR = 1.08; // generic home-advantage assumption, used only until real home-specific data outweighs it
+const DEFAULT_AWAY_ATTACK_FACTOR = 0.96;
+const DEFAULT_HOME_DEFENSE_FACTOR = 0.94; // teams tend to concede a little less at home
+const DEFAULT_AWAY_DEFENSE_FACTOR = 1.06;
 const MAX_GOALS = 8;
 
-// Builds each team's shrunk attack/defense strength (relative to the
-// league-average goals/team/game) from every FINISHED match in the fetched
-// season fixtures, blended with Understat's xG context when available.
-// `xgContext` is `{ current, previous }` from xg.js — either can be null
-// (Understat unreachable this run, or a specific team missing from it),
-// in which case that team's strength falls back to real goals only, per
-// the hard "never fabricate" rule.
+// Turns a chronological (oldest-first) list of {venue, attack, defense}
+// entries into a recency-weighted average for one venue ("home" | "away"),
+// or overall (venue = null). Returns { attack, defense, effectiveGames } —
+// effectiveGames is the DECAYED count of matches actually used (older
+// matches contribute less than a full "1 game" of evidence), which is what
+// the shrinkage below uses as its sample size instead of a flat count.
+function venueStats(entries, venue) {
+  const filtered = venue ? entries.filter((e) => e.venue === venue) : entries;
+  if (!filtered.length) return { attack: null, defense: null, effectiveGames: 0 };
+  let sumW = 0, sumAttack = 0, sumDefense = 0;
+  // filtered is oldest-first; rank 0 = most recent.
+  for (let i = 0; i < filtered.length; i++) {
+    const rank = filtered.length - 1 - i;
+    const w = Math.pow(FORM_DECAY, rank);
+    sumW += w;
+    sumAttack += w * filtered[i].attack;
+    sumDefense += w * filtered[i].defense;
+  }
+  return { attack: sumAttack / sumW, defense: sumDefense / sumW, effectiveGames: sumW };
+}
+
+// Blends a (possibly null, if no matches at that venue yet) observed value
+// toward a prior, weighted by how much real evidence backs the observed
+// value versus priorGames worth of the prior. Null-safe: no matches yet at
+// this venue just returns the prior outright.
+function shrinkToward(value, effectiveGames, prior, priorGames) {
+  const v = value == null ? 0 : value;
+  return (v * effectiveGames + prior * priorGames) / (effectiveGames + priorGames);
+}
+
+// Builds each team's chronological, venue-tagged goals history from real
+// finished results (football-data.org) — the fallback signal whenever
+// Understat's xG isn't available for a team.
+function buildGoalsHistory(seasonFixtures) {
+  const byTeam = {};
+  const ensure = (t) => (byTeam[t] ||= []);
+  const finished = (seasonFixtures || [])
+    .filter((f) => f.status === "finished" && f.score)
+    .slice()
+    .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
+  for (const f of finished) {
+    const parts = f.score.split(/[–-]/).map((n) => parseInt(n, 10));
+    if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) continue;
+    const [hGoals, aGoals] = parts;
+    ensure(f.home).push({ date: f.kickoffLocal, venue: "home", attack: hGoals, defense: aGoals });
+    ensure(f.away).push({ date: f.kickoffLocal, venue: "away", attack: aGoals, defense: hGoals });
+  }
+  return byTeam;
+}
+
+// Picks which signal to use for one team — Understat's xG when it has at
+// least one game recorded this season (steadier, see top-of-file comment),
+// otherwise real goals. Never mixes the two game-by-game (different units),
+// only switches wholesale per team.
+function normalizeEntries(xgEntries, goalsEntries) {
+  if (xgEntries && xgEntries.length > 0) {
+    return {
+      usingXg: true,
+      entries: xgEntries.map((g) => ({ venue: g.venue, attack: g.xgFor, defense: g.xgAgainst })),
+    };
+  }
+  return {
+    usingXg: false,
+    entries: (goalsEntries || []).map((g) => ({ venue: g.venue, attack: g.attack, defense: g.defense })),
+  };
+}
+
+// Builds each team's shrunk, venue-specific attack/defense strength
+// (relative to the league-average goals/team/game) from every FINISHED
+// match in the fetched season fixtures, blended with Understat's xG
+// context when available. `xgContext` is `{ current, previous }` from
+// xg.js — either can be null (Understat unreachable this run, or a
+// specific team missing from it), in which case that team's strength falls
+// back to real goals only, per the hard "never fabricate" rule.
 export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
   const xgCurrent = xgContext.current || null;
   const xgPrevious = xgContext.previous || null;
 
-  const byTeam = {};
-  const ensure = (t) => (byTeam[t] ||= { gf: 0, ga: 0, gp: 0 });
+  const goalsHistory = buildGoalsHistory(seasonFixtures);
 
   let totalGoals = 0;
   let totalTeamGames = 0;
-
-  for (const f of seasonFixtures) {
+  for (const f of seasonFixtures || []) {
     if (f.status !== "finished" || !f.score) continue;
     const parts = f.score.split(/[–-]/).map((n) => parseInt(n, 10));
     if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) continue;
-    const [hGoals, aGoals] = parts;
-
-    const h = ensure(f.home);
-    h.gf += hGoals;
-    h.ga += aGoals;
-    h.gp += 1;
-
-    const a = ensure(f.away);
-    a.gf += aGoals;
-    a.ga += hGoals;
-    a.gp += 1;
-
-    totalGoals += hGoals + aGoals;
+    totalGoals += parts[0] + parts[1];
     totalTeamGames += 2;
   }
-
   const leagueAvgGoals = totalTeamGames ? totalGoals / totalTeamGames : 1.35; // per team per game, fallback if season just started
 
   // League-average xG rate (last season), used as the prior only for a
@@ -74,16 +144,16 @@ export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
     }
   }
 
+  const teams = new Set([...Object.keys(goalsHistory), ...(xgCurrent ? Object.keys(xgCurrent) : [])]);
   const strengths = {};
-  for (const [team, s] of Object.entries(byTeam)) {
-    const xgNow = xgCurrent?.[team];
-    const usingXg = !!(xgNow && xgNow.games > 0);
 
-    // This season's rate: prefer Understat's xG (steadier), fall back to
-    // real goals from football-data.org.
-    const gamesForRate = usingXg ? xgNow.games : s.gp;
-    const attackNow = usingXg ? xgNow.xgFor / xgNow.games : s.gp ? s.gf / s.gp : leagueAvgGoals;
-    const defenseNow = usingXg ? xgNow.xgAgainst / xgNow.games : s.gp ? s.ga / s.gp : leagueAvgGoals;
+  for (const team of teams) {
+    const { usingXg, entries } = normalizeEntries(xgCurrent?.[team], goalsHistory[team]);
+    if (!entries.length) continue; // no finished-match data yet for this team — leave it out entirely, never a guess
+
+    const overall = venueStats(entries, null);
+    const home = venueStats(entries, "home");
+    const away = venueStats(entries, "away");
 
     // Prior: this team's own last-season xG rate when Understat has it,
     // otherwise the league-average xG rate.
@@ -92,13 +162,28 @@ export function computeTeamGoalStats(seasonFixtures, xgContext = {}) {
     const priorAttack = usingPreviousSeasonPrior ? prevTeam.xgFor / prevTeam.games : leagueAvgXg;
     const priorDefense = usingPreviousSeasonPrior ? prevTeam.xgAgainst / prevTeam.games : leagueAvgXg;
 
-    const shrunkAttack = (attackNow * gamesForRate + priorAttack * PRIOR_GAMES) / (gamesForRate + PRIOR_GAMES);
-    const shrunkDefense = (defenseNow * gamesForRate + priorDefense * PRIOR_GAMES) / (gamesForRate + PRIOR_GAMES);
+    // Level 1: this season's recency-weighted overall rate, shrunk toward
+    // the prior above — same shrinkage this project has always used, just
+    // recency-weighted now instead of a flat season average.
+    const shrunkOverallAttack = shrinkToward(overall.attack, overall.effectiveGames, priorAttack, PRIOR_GAMES);
+    const shrunkOverallDefense = shrinkToward(overall.defense, overall.effectiveGames, priorDefense, PRIOR_GAMES);
+
+    // Level 2: home/away-specific rate, shrunk toward THIS team's own
+    // overall rate (not the generic league prior) — nudged by a small
+    // default home/away factor so a team with no home (or away) games yet
+    // this season still gets a sensible generic assumption, exactly like
+    // the old flat constants did, fading out as real venue data arrives.
+    const shrunkHomeAttack = shrinkToward(home.attack, home.effectiveGames, shrunkOverallAttack * DEFAULT_HOME_ATTACK_FACTOR, VENUE_PRIOR_GAMES);
+    const shrunkHomeDefense = shrinkToward(home.defense, home.effectiveGames, shrunkOverallDefense * DEFAULT_HOME_DEFENSE_FACTOR, VENUE_PRIOR_GAMES);
+    const shrunkAwayAttack = shrinkToward(away.attack, away.effectiveGames, shrunkOverallAttack * DEFAULT_AWAY_ATTACK_FACTOR, VENUE_PRIOR_GAMES);
+    const shrunkAwayDefense = shrinkToward(away.defense, away.effectiveGames, shrunkOverallDefense * DEFAULT_AWAY_DEFENSE_FACTOR, VENUE_PRIOR_GAMES);
 
     strengths[team] = {
-      attack: shrunkAttack / leagueAvgGoals,
-      defense: shrunkDefense / leagueAvgGoals,
-      gamesPlayed: s.gp,
+      homeAttack: shrunkHomeAttack / leagueAvgGoals,
+      homeDefense: shrunkHomeDefense / leagueAvgGoals,
+      awayAttack: shrunkAwayAttack / leagueAvgGoals,
+      awayDefense: shrunkAwayDefense / leagueAvgGoals,
+      gamesPlayed: entries.length,
       usingXg,
       usingPreviousSeasonPrior,
     };
@@ -119,8 +204,12 @@ export function computeGoalsPrediction(home, away, teamStrengths) {
   const a = strengths[away];
   if (!h || !a) return null; // no finished-match data yet for one side — don't guess, per the hard rule
 
-  const homeExp = Math.max(0.3, leagueAvgGoals * h.attack * a.defense * HOME_GOAL_BOOST);
-  const awayExp = Math.max(0.3, leagueAvgGoals * a.attack * h.defense * AWAY_GOAL_DAMPEN);
+  // Each team's own home/away-specific attack and defense strength already
+  // carries whatever real home-advantage (or lack of it) that team has
+  // shown this season — see computeTeamGoalStats — so no separate flat
+  // home-boost/away-dampen multiplier is applied here on top of it.
+  const homeExp = Math.max(0.3, leagueAvgGoals * h.homeAttack * a.awayDefense);
+  const awayExp = Math.max(0.3, leagueAvgGoals * a.awayAttack * h.homeDefense);
 
   let pOver25 = 0;
   const grid = [];
