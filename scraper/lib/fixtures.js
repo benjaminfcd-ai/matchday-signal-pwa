@@ -81,6 +81,25 @@ export async function fetchSeasonFixtures(competition = "PL") {
         score: finished && homeScore != null && awayScore != null
           ? `${homeScore}–${awayScore}`
           : null,
+        // The competition's own official round number (an integer, e.g. 4)
+        // for a league-phase match, or null for a knockout-stage match that
+        // isn't numbered that way (see `stage` below). This is what run.js
+        // now uses to group fixtures into "a round" — the organizer's own
+        // grouping, rather than guessing from which calendar day a fixture
+        // happens to fall on. That matters because a fixture doesn't always
+        // stay on its "usual" day: a Premier League match can get moved to
+        // a weekday for TV, a postponement gets replayed days later, etc. —
+        // it keeps the same matchday number either way, so grouping by this
+        // field (instead of a Fri–Sun/Mon–Thu calendar window) means a
+        // rescheduled fixture still lands in the right round instead of
+        // silently falling outside a fixed window and never appearing.
+        matchday: typeof m.matchday === "number" ? m.matchday : null,
+        // The competition stage (e.g. "REGULAR_SEASON", "LEAGUE_STAGE",
+        // "LAST_16", "QUARTER_FINALS", ...) — used only as a fallback label
+        // when `matchday` is null (see run.js's stageLabel()), chiefly for
+        // Champions League knockout rounds once the season moves past its
+        // numbered league phase.
+        stage: m.stage || null,
       };
     });
 }
