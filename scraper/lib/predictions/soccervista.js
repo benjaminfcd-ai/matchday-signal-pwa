@@ -3,6 +3,16 @@ import { withPage } from "../browser.js";
 const LEAGUE_URLS = {
   PL: "https://www.soccervista.com/england/premier-league/dYlOSQOD/",
   CL: "https://www.soccervista.com/europe/champions-league/xGrwqq16/",
+  // La Liga confirmed by a direct fetch (title: "Spain LaLiga 2026/2027
+  // Predictions and Statistics"). Bundesliga's page title was confirmed to
+  // exist via search-engine indexing, but this exact URL could NOT be
+  // directly fetch-verified this time (soccervista's server kept redirecting
+  // https->http in a loop this environment's proxy couldn't follow) — it
+  // follows the identical domain/path/id pattern as every other confirmed
+  // URL here, so it's very likely correct, but if this one specifically
+  // comes back empty every run, that's the first thing to check by hand.
+  BL1: "https://www.soccervista.com/germany/bundesliga/W6BOzpK2/",
+  PD: "https://www.soccervista.com/spain/laliga/QVmLl54o/",
 };
 
 // SoccerVista's fixture/prediction content is rendered client-side by
