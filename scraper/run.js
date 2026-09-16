@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 import { fetchSeasonFixtures, weekendWindow, midweekWindow } from "./lib/fixtures.js";
 import { computeTeamGoalStats } from "./lib/predictions/goalsModel.js";
+import { computeOwnEloRatings } from "./lib/predictions/ownElo.js";
 import { fetchXgContext } from "./lib/xg.js";
 import { researchFixture } from "./lib/research.js";
 import { fetchStandings } from "./lib/standings.js";
@@ -19,14 +20,26 @@ import { fetchStandings } from "./lib/standings.js";
 // again a few minutes early or late, or twice in a row, does nothing
 // harmful.
 //
-// Two competitions run side by side, each with its own round lifecycle: the
-// Premier League ("PL") uses the Fri–Sun weekend window; the Champions
-// League ("CL") uses the Mon–Thu midweek window (see fixtures.js) since CL
-// fixtures cluster on weekdays instead. They're independent — a live PL
-// round and a live CL round coexist in the matches table at once,
-// distinguished by each row's `competition` column, and a live CL round
-// finishing early (or late) never blocks or delays the PL round, or vice
-// versa.
+// Two competitions run side by side, each with its own round lifecycle,
+// independently — a live PL round and a live CL round coexist in the
+// matches table at once, distinguished by each row's `competition` column,
+// and a live CL round finishing early (or late) never blocks or delays the
+// PL round, or vice versa.
+//
+// WHICH FIXTURES BECOME "A ROUND": this prefers each competition's own
+// official matchday number (from football-data.org — see fixtures.js) over
+// any calendar-day guess. That matters because a fixture doesn't always
+// stay on its "usual" day — a Premier League match can get moved to a
+// weekday for TV, a postponement gets replayed a few days later — but it
+// keeps the same matchday number either way, so grouping by that number
+// (see pickRoundFixtures() below) means a rescheduled fixture still lands
+// in the right round instead of silently falling outside a fixed calendar
+// window and never appearing on the site at all. The Fri–Sun / Mon–Thu
+// calendar windows this project used to group by exclusively (see
+// weekendWindow()/midweekWindow() in fixtures.js) are kept only as a
+// FALLBACK, used when nothing upcoming has a matchday number — chiefly a
+// Champions League knockout round (Round of 16 onward), which isn't
+// numbered "matchday 1, 2, 3..." the way the league phase is.
 //
 // This 12-hour, per-fixture window is a deliberate design choice, not a
 // limitation: every fixture in a round activates independently, 12 hours
@@ -77,6 +90,54 @@ function competitionLabel(competition) {
 
 function windowForCompetition(competition, ref) {
   return competition === "CL" ? midweekWindow(ref) : weekendWindow(ref);
+}
+
+// Human-readable names for the football-data.org `stage` values that show
+// up once matchday numbers run out (see the comment above). Only used as a
+// label when matchday is null — an unmapped/unexpected stage value just
+// falls back to the generic "Round" in the caller rather than crashing.
+const STAGE_LABELS = {
+  LEAGUE_STAGE: "League phase",
+  GROUP_STAGE: "League phase",
+  PLAYOFFS: "Knockout playoff round",
+  PLAYOFF_ROUND_1: "Knockout playoff round",
+  PLAYOFF_ROUND_2: "Knockout playoff round",
+  LAST_64: "Round of 64",
+  LAST_32: "Round of 32",
+  LAST_16: "Round of 16",
+  QUARTER_FINALS: "Quarter-finals",
+  SEMI_FINALS: "Semi-finals",
+  THIRD_PLACE: "Third-place play-off",
+  FINAL: "Final",
+  REGULAR_SEASON: "Regular season",
+};
+function stageLabel(stage) {
+  return STAGE_LABELS[stage] || null;
+}
+
+// Picks which fixtures become "the next round" for this competition.
+// Prefers the real matchday number (see the top-of-file comment); falls
+// back to the old Fri–Sun/Mon–Thu calendar-window guess only when nothing
+// upcoming carries a matchday number at all.
+function pickRoundFixtures(competition, seasonFixtures, ref) {
+  const upcomingWithMatchday = seasonFixtures.filter((f) => f.status === "upcoming" && f.matchday != null);
+
+  if (upcomingWithMatchday.length > 0) {
+    const nextMatchday = Math.min(...upcomingWithMatchday.map((f) => f.matchday));
+    const windowFixtures = seasonFixtures
+      .filter((f) => f.matchday === nextMatchday)
+      .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
+    return { windowFixtures, matchday: nextMatchday, stage: windowFixtures[0]?.stage || null };
+  }
+
+  const { start, end } = windowForCompetition(competition, ref);
+  const windowFixtures = seasonFixtures
+    .filter((f) => {
+      const t = new Date(f.kickoffLocal).getTime();
+      return t >= start.getTime() && t < end.getTime();
+    })
+    .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
+  return { windowFixtures, matchday: null, stage: windowFixtures[0]?.stage || null };
 }
 
 function placeholderFixture(f) {
@@ -194,34 +255,35 @@ async function ensureRoundExists(competition, seasonFixtures) {
     return false; // a round already exists for this competition — nothing to do, whether it's finished or not (archiveIfComplete handles retirement)
   }
 
-  const { start, end } = windowForCompetition(competition, nowIct());
-  console.log(`${competitionLabel(competition)} window: ${start.toISOString()} to ${end.toISOString()}`);
-  const windowFixtures = seasonFixtures.filter((f) => {
-    const t = new Date(f.kickoffLocal).getTime();
-    return t >= start.getTime() && t < end.getTime();
-  });
+  const { windowFixtures, matchday, stage } = pickRoundFixtures(competition, seasonFixtures, nowIct());
+  console.log(
+    matchday != null
+      ? `${competitionLabel(competition)} next round: Matchday ${matchday} (${windowFixtures.length} fixture(s))`
+      : `${competitionLabel(competition)} next round: no matchday number available — using calendar-window fallback (${windowFixtures.length} fixture(s), stage=${stage || "unknown"})`
+  );
   if (windowFixtures.length === 0) {
-    console.warn(`No ${competitionLabel(competition)} fixtures found in that window yet — will check again next run.`);
+    console.warn(`No ${competitionLabel(competition)} fixtures found for the next round yet — will check again next run.`);
     return false;
   }
 
   // Guard against recreating a round whose real-world fixtures have ALL
-  // already kicked off. windowForCompetition() re-resolves to "the weekend/
-  // midweek window containing (or immediately preceding) now" — for the
-  // Fri-Sun and Mon-Thu windows this project uses, that same window keeps
-  // being returned for every "now" through the rest of that period, not
-  // just the moment the round was created. So the instant `matches` is
-  // empty for a competition for ANY reason while "now" still falls in that
-  // same period — the normal case right after archiveIfComplete() retires a
+  // already kicked off. With matchday-based selection (the normal case
+  // now) this mostly can't happen — pickRoundFixtures() only ever picks a
+  // matchday that still has at least one fixture in "upcoming" status, and
+  // once every one of a round's fixtures is actually "finished" it drops
+  // out of that pool on its own, so the next call naturally advances to
+  // the next matchday instead of re-selecting the same one. It stays as a
+  // safety net for the calendar-window FALLBACK path though — that's the
+  // scenario this guard was originally written for: the old Fri-Sun/Mon-
+  // Thu window logic re-resolves to "the window containing (or immediately
+  // preceding) now" for every call throughout that period, so the instant
+  // `matches` is empty for a competition for ANY reason while "now" still
+  // falls in that same period — right after archiveIfComplete() retires a
   // finished round, or an out-of-band cleanup like a manual archived_rounds
   // deletion — this function would otherwise recreate the exact same,
   // already-concluded round from scratch as blank "Not yet analyzed"
-  // placeholders, which then immediately re-finalizes and re-archives on
-  // the next run or two, producing a fresh duplicate archived_rounds entry
-  // every single cycle until the calendar finally rolls into a genuinely
-  // new window. A round where every fixture has already kicked off has
-  // nothing "upcoming" left to track, so there's nothing worth creating —
-  // skip it and simply wait for a window with real upcoming fixtures.
+  // placeholders, producing a fresh duplicate archived_rounds entry every
+  // single cycle until the calendar rolls into a genuinely new window.
   const nowMs = nowIct().getTime();
   const allAlreadyKickedOff = windowFixtures.every((f) => new Date(f.kickoffLocal).getTime() < nowMs);
   if (allAlreadyKickedOff) {
@@ -239,13 +301,22 @@ async function ensureRoundExists(competition, seasonFixtures) {
 
   const firstDate = dayOfIct(windowFixtures[0].kickoffLocal);
   const lastDate = dayOfIct(windowFixtures[windowFixtures.length - 1].kickoffLocal);
+  // Matchday number in the label when we have one — it's a clearer,
+  // more stable identifier than a date range now that a round's fixtures
+  // aren't guaranteed to fall within one neat calendar window (that's the
+  // whole point of grouping by matchday instead — see the top-of-file
+  // comment). Falls back to a human stage name (or a generic "Round") for
+  // the rare calendar-window-fallback case instead.
+  const roundLabel = matchday != null
+    ? `${competitionLabel(competition)} · Matchday ${matchday} · ${firstDate} – ${lastDate}`
+    : `${competitionLabel(competition)} · ${stageLabel(stage) || "Round"} · ${firstDate} – ${lastDate}`;
   await supabaseAdmin.from("meta").upsert({
     id: metaId(competition),
-    round_label: `${competitionLabel(competition)} · ${firstDate} – ${lastDate}`,
+    round_label: roundLabel,
     last_updated: new Date().toISOString(),
   });
   console.log(
-    `New ${competitionLabel(competition)} round created: ${rows.length} fixture(s) as placeholders — each gets researched automatically once it's ` +
+    `New ${competitionLabel(competition)} round created (${roundLabel}): ${rows.length} fixture(s) as placeholders — each gets researched automatically once it's ` +
       `within ${RESEARCH_WINDOW_HOURS}h of its own kickoff.`
   );
   return true;
@@ -319,6 +390,13 @@ async function main() {
       (xgTeamsCurrent === 0 ? " (Understat unreachable or unparsed this run — falling back to goals-only, as designed.)" : "")
   );
 
+  // Our Elo (see ownElo.js) — computed ONCE per run from every finished
+  // fixture across BOTH competitions (a club's Champions League results
+  // feed the same rating its Premier League results do), then passed into
+  // every researchFixture() call below, the same way teamStrengths is.
+  const ownEloRatings = computeOwnEloRatings(seasonFixtures);
+  console.log(`Our Elo: computed rating(s) for ${Object.keys(ownEloRatings).length} team(s) with at least one finished match this season.`);
+
   const { data: freshRows, error: freshErr } = await supabaseAdmin.from("matches").select("*");
   if (freshErr) throw freshErr;
   const toResearch = (freshRows || []).filter((r) => {
@@ -343,7 +421,8 @@ async function main() {
         researchFixture(
           { id: r.id, competition: r.competition, home: r.home, away: r.away, kickoffLocal: r.kickoff_local },
           teamStrengths,
-          crestMap
+          crestMap,
+          ownEloRatings
         )
       )
     );
