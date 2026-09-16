@@ -20,26 +20,31 @@ import { fetchStandings } from "./lib/standings.js";
 // again a few minutes early or late, or twice in a row, does nothing
 // harmful.
 //
-// Two competitions run side by side, each with its own round lifecycle,
-// independently — a live PL round and a live CL round coexist in the
-// matches table at once, distinguished by each row's `competition` column,
-// and a live CL round finishing early (or late) never blocks or delays the
-// PL round, or vice versa.
+// FOUR competitions run side by side, each with its own round lifecycle,
+// independently — Premier League, Champions League, Bundesliga, and La
+// Liga (added Sept 2026 — see README's "Adding a league" section for how
+// this was wired in) each have their own live round in the matches table
+// at once, distinguished by each row's `competition` column, and one
+// competition's round finishing early (or late), or hitting a scraper
+// error, never blocks or delays any other competition's round.
 //
 // WHICH FIXTURES BECOME "A ROUND": this prefers each competition's own
 // official matchday number (from football-data.org — see fixtures.js) over
 // any calendar-day guess. That matters because a fixture doesn't always
-// stay on its "usual" day — a Premier League match can get moved to a
-// weekday for TV, a postponement gets replayed a few days later — but it
-// keeps the same matchday number either way, so grouping by that number
-// (see pickRoundFixtures() below) means a rescheduled fixture still lands
-// in the right round instead of silently falling outside a fixed calendar
+// stay on its "usual" day — a match can get moved to a weekday for TV, a
+// postponement gets replayed a few days later — but it keeps the same
+// matchday number either way, so grouping by that number (see
+// pickRoundFixtures() below) means a rescheduled fixture still lands in
+// the right round instead of silently falling outside a fixed calendar
 // window and never appearing on the site at all. The Fri–Sun / Mon–Thu
 // calendar windows this project used to group by exclusively (see
 // weekendWindow()/midweekWindow() in fixtures.js) are kept only as a
 // FALLBACK, used when nothing upcoming has a matchday number — chiefly a
 // Champions League knockout round (Round of 16 onward), which isn't
-// numbered "matchday 1, 2, 3..." the way the league phase is.
+// numbered "matchday 1, 2, 3..." the way a league phase is. Bundesliga and
+// La Liga are both single-table league seasons with no knockout stage, so
+// in practice they should almost always have a matchday number available
+// and rarely if ever need this fallback.
 //
 // This 12-hour, per-fixture window is a deliberate design choice, not a
 // limitation: every fixture in a round activates independently, 12 hours
@@ -62,6 +67,24 @@ const HARD_RULE_NEVER_FABRICATE = true; // documentation flag — see README "ha
 // nothing here forces a prediction to change just because a run happened.
 const RESEARCH_WINDOW_HOURS = 12;
 
+// Every domestic/continental competition this project tracks. Order here
+// only affects log/console ordering — nothing structural depends on it.
+// Adding a fifth competition means adding its code here, plus a URL/slug
+// entry in each per-source file (see README's "Adding a league" section)
+// — nothing else in this file needs to change, since every step below
+// already loops over this list generically.
+const COMPETITIONS = ["PL", "CL", "BL1", "PD"];
+// Competitions whose fixture history feeds the shared goals model (see
+// step 3 in main()) — deliberately NOT including "CL": Champions League
+// fixtures mix clubs from many different domestic leagues (several of
+// which this project doesn't otherwise track) at a different competitive
+// level, so folding its scorelines into a domestic league's own average
+// would corrupt that league's baseline rather than improve it. A Champions
+// League fixture simply gets no goals-model reading — the same graceful
+// "no data available" degrade as any other missing source, per this
+// project's hard "never fabricate" rule.
+const GOALS_MODEL_COMPETITIONS = ["PL", "BL1", "PD"];
+
 function nowIct() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
 }
@@ -76,8 +99,9 @@ function hoursUntil(kickoffIso, fromMs = Date.now()) {
 
 // The meta table keeps the existing Premier League row's id ("status")
 // completely unchanged — zero migration risk for the app's existing reads
-// — and Champions League gets its own row at a new id instead of a schema
-// restructure.
+// — and every other competition gets its own row at "status_<CODE>"
+// instead of a schema restructure. Generic by construction, so a new
+// competition needs no change here.
 function metaId(competition) {
   return competition === "PL" ? "status" : `status_${competition}`;
 }
@@ -85,9 +109,19 @@ function metaId(competition) {
 function competitionLabel(competition) {
   if (competition === "PL") return "Premier League";
   if (competition === "CL") return "Champions League";
+  if (competition === "BL1") return "Bundesliga";
+  if (competition === "PD") return "La Liga";
   return competition;
 }
 
+// Champions League fixtures cluster midweek; every other competition this
+// project tracks (Premier League, Bundesliga, La Liga) is a domestic
+// league that plays its main round across the weekend — so this only needs
+// to special-case CL, and any future weekend league added to COMPETITIONS
+// above gets the right window automatically without a change here. This
+// fallback matters far less than it used to now that matchday-based
+// grouping (see pickRoundFixtures() below) is the primary method — see the
+// top-of-file comment.
 function windowForCompetition(competition, ref) {
   return competition === "CL" ? midweekWindow(ref) : weekendWindow(ref);
 }
@@ -161,9 +195,10 @@ function placeholderFixture(f) {
   };
 }
 
-// seasonFixtures here is the COMBINED list across both competitions — safe
-// because PL and CL fixture IDs can never collide (see fixtures.js), so one
-// id -> fixture map works for both at once.
+// seasonFixtures here is the COMBINED list across every competition — safe
+// because every competition's fixture IDs are prefixed by that
+// competition's own code (see fixtures.js) and can never collide, so one
+// id -> fixture map works for all of them at once.
 async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
   const byId = new Map(seasonFixtures.map((f) => [f.id, f]));
   // Fallback index for a row whose id no longer matches any freshly-fetched
@@ -219,14 +254,14 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
 }
 
 // Creates the next round for THIS competition from its coming window
-// (weekend for PL, midweek for CL), but ONLY once the table is genuinely
-// empty for that competition — i.e. after archiveIfComplete() has already
-// retired the previous round because every fixture in it actually finished.
-// Every fixture starts as a placeholder — research happens later,
-// per-fixture, once each one enters its own RESEARCH_WINDOW_HOURS window
-// (see main()). Filters everything by `competition` so a PL and a CL round
-// can live in the matches table at the same time without interfering with
-// each other.
+// (weekend for PL/BL1/PD, midweek for CL), but ONLY once the table is
+// genuinely empty for that competition — i.e. after archiveIfComplete() has
+// already retired the previous round because every fixture in it actually
+// finished. Every fixture starts as a placeholder — research happens
+// later, per-fixture, once each one enters its own RESEARCH_WINDOW_HOURS
+// window (see main()). Filters everything by `competition` so every
+// competition's round can live in the matches table at the same time
+// without interfering with each other.
 //
 // IMPORTANT: this function used to also archive-and-recreate a round on its
 // own whenever every row's kickoff time had passed ("allPast"), regardless
@@ -344,17 +379,20 @@ async function archiveIfComplete(competition) {
 }
 
 async function main() {
-  const [plFixtures, clFixtures] = await Promise.all([
-    fetchSeasonFixtures("PL"),
-    fetchSeasonFixtures("CL"),
-  ]);
-  const seasonFixtures = [...plFixtures, ...clFixtures];
+  const fixturesByCompetition = {};
+  await Promise.all(
+    COMPETITIONS.map(async (competition) => {
+      fixturesByCompetition[competition] = await fetchSeasonFixtures(competition);
+    })
+  );
+  const seasonFixtures = COMPETITIONS.flatMap((c) => fixturesByCompetition[c]);
   console.log(
-    `Fetched ${plFixtures.length} Premier League and ${clFixtures.length} Champions League season fixture(s).`
+    COMPETITIONS.map((c) => `${fixturesByCompetition[c].length} ${competitionLabel(c)}`).join(", ") +
+      ` season fixture(s) fetched.`
   );
 
-  // 1. Finalize anything that finished since the last run (both
-  // competitions at once — one combined read, since each row already
+  // 1. Finalize anything that finished since the last run (every
+  // competition at once — one combined read, since each row already
   // carries its own `competition`).
   const { data: currentRows, error: readErr } = await supabaseAdmin.from("matches").select("*");
   if (readErr) throw readErr;
@@ -365,34 +403,41 @@ async function main() {
   // 2. Create the next round for each competition once its current one is
   // done (or there isn't one yet) and its fixtures are known from
   // football-data.org. Independent per competition — see ensureRoundExists.
-  await ensureRoundExists("PL", plFixtures);
-  await ensureRoundExists("CL", clFixtures);
+  for (const competition of COMPETITIONS) {
+    await ensureRoundExists(competition, fixturesByCompetition[competition]);
+  }
 
-  // 3. (Re-)research every fixture (either competition) now inside its
+  // 3. (Re-)research every fixture (any competition) now inside its
   // pre-kickoff window.
-  const xgContext = await fetchXgContext();
-  const xgTeamsCurrent = xgContext.current ? Object.keys(xgContext.current).length : 0;
-  const xgTeamsPrevious = xgContext.previous ? Object.keys(xgContext.previous).length : 0;
+  const xgContext = await fetchXgContext(GOALS_MODEL_COMPETITIONS);
+  for (const competition of GOALS_MODEL_COMPETITIONS) {
+    const c = xgContext[competition] || {};
+    const cur = c.current ? Object.keys(c.current).length : 0;
+    const prev = c.previous ? Object.keys(c.previous).length : 0;
+    console.log(
+      `xG context (${competitionLabel(competition)}): ${cur} team(s) with current-season Understat data, ` +
+        `${prev} with last-season data for the early-season prior.` +
+        (cur === 0 ? " (Understat unreachable or unparsed this run — falling back to goals-only, as designed.)" : "")
+    );
+  }
 
-  // The goals model is built from Premier League results only (see
-  // goalsModel.js) — passing plFixtures rather than the combined list keeps
-  // its league-average baseline meaningful, instead of diluting it with
-  // Champions League scorelines it was never designed around. A Champions
-  // League fixture just gets no goals-model reading — the same graceful
-  // "no data available" degrade as any other missing source, per this
-  // project's hard "never fabricate" rule.
-  const teamStrengths = computeTeamGoalStats(plFixtures, xgContext);
+  // The goals model runs across every domestic league this project tracks
+  // (NOT Champions League — see GOALS_MODEL_COMPETITIONS above for why),
+  // each with its own league-average baseline computed independently, then
+  // merged into one lookup by team name — see goalsModel.js.
+  const goalsFixtures = {};
+  for (const competition of GOALS_MODEL_COMPETITIONS) goalsFixtures[competition] = fixturesByCompetition[competition];
+  const teamStrengths = computeTeamGoalStats(goalsFixtures, xgContext);
   console.log(
-    `Goals model: computed scoring strength for ${teamStrengths.teamsWithData} team(s) ` +
-      `(league avg ${teamStrengths.leagueAvgGoals.toFixed(2)} goals/team/game so far). ` +
-      `xG context: ${xgTeamsCurrent} team(s) with current-season Understat data, ` +
-      `${xgTeamsPrevious} with last-season data for the early-season prior.` +
-      (xgTeamsCurrent === 0 ? " (Understat unreachable or unparsed this run — falling back to goals-only, as designed.)" : "")
+    `Goals model: computed scoring strength for ${teamStrengths.teamsWithData} team(s) across ${GOALS_MODEL_COMPETITIONS.length} league(s) — ` +
+      Object.entries(teamStrengths.byCompetition)
+        .map(([c, s]) => `${competitionLabel(c)}: ${s.teamsWithData} team(s), avg ${s.leagueAvgGoals.toFixed(2)} goals/team/game`)
+        .join("; ")
   );
 
   // Our Elo (see ownElo.js) — computed ONCE per run from every finished
-  // fixture across BOTH competitions (a club's Champions League results
-  // feed the same rating its Premier League results do), then passed into
+  // fixture across EVERY competition (a club's Champions League results
+  // feed the same rating its domestic-league results do), then passed into
   // every researchFixture() call below, the same way teamStrengths is.
   const ownEloRatings = computeOwnEloRatings(seasonFixtures);
   console.log(`Our Elo: computed rating(s) for ${Object.keys(ownEloRatings).length} team(s) with at least one finished match this season.`);
@@ -408,7 +453,7 @@ async function main() {
   // Team crest URLs, keyed by canonical team name — rebuilt fresh every run
   // from football-data.org (see fixtures.js) so even a fixture created
   // before team badges existed gets one the next time it's (re-)researched.
-  // Built from both competitions' season fixtures at once.
+  // Built from every competition's season fixtures at once.
   const crestMap = new Map();
   for (const f of seasonFixtures) {
     if (f.homeCrest) crestMap.set(f.home, f.homeCrest);
@@ -456,16 +501,17 @@ async function main() {
 
   // 4. Archive each competition's round once every fixture in it has
   // finished.
-  await archiveIfComplete("PL");
-  await archiveIfComplete("CL");
+  for (const competition of COMPETITIONS) {
+    await archiveIfComplete(competition);
+  }
 
   // 5. Refresh the league table for each competition. Best-effort and
   // independent per competition: a standings hiccup for one shouldn't fail
-  // the whole run, and shouldn't block the other competition's table either
+  // the whole run, and shouldn't block any other competition's table either
   // — same "current" row id the app has always read for Premier League
-  // (untouched), plus a new "current_CL" row for the Champions League
-  // league-phase table (see standings.js — it's fetched the same way).
-  for (const competition of ["PL", "CL"]) {
+  // (untouched), plus a "current_<CODE>" row for every other competition
+  // (see standings.js — it's fetched the same way for all of them).
+  for (const competition of COMPETITIONS) {
     try {
       const standingsRows = await fetchStandings(competition);
       if (standingsRows.length) {
@@ -484,12 +530,12 @@ async function main() {
     }
   }
 
-  await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status");
-  // A no-op until the first Champions League round is ever created — that
-  // round's own upsert (see ensureRoundExists) is what first creates this
-  // row, so an update against a row that doesn't exist yet simply matches
-  // nothing.
-  await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", "status_CL");
+  // A no-op for any competition whose meta row doesn't exist yet — that
+  // row's own upsert (see ensureRoundExists) is what first creates it, so
+  // an update against a row that doesn't exist yet simply matches nothing.
+  for (const competition of COMPETITIONS) {
+    await supabaseAdmin.from("meta").update({ last_updated: new Date().toISOString() }).eq("id", metaId(competition));
+  }
 }
 
 main().catch((err) => {
