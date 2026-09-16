@@ -1,8 +1,10 @@
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 import { fetchSeasonFixtures } from "./lib/fixtures.js";
 import { computeTeamGoalStats } from "./lib/predictions/goalsModel.js";
+import { computeOwnEloRatings } from "./lib/predictions/ownElo.js";
 import { fetchXgContext } from "./lib/xg.js";
 import { researchFixture } from "./lib/research.js";
+import { mergeAiResearch } from "./lib/aiResearchMerge.js";
 
 // ONE-OFF, MANUALLY-TRIGGERED TOOL — this is NOT part of the regular every-
 // 3-hours schedule and has no cron trigger of its own (see
@@ -22,6 +24,11 @@ import { researchFixture } from "./lib/research.js";
 // — Opta, Wincomparator, SoccerVista, Elo, the goals model — for every
 // fixture that's already been researched at least once, right now,
 // regardless of how far off its kickoff is, so they catch up immediately.
+// AI Research normally runs on its own separate 6-hour-window /
+// every-2-hours schedule (see ai-research-refresh.js) rather than this
+// 12-hour one, but since this script is an explicit, one-off, catch-
+// everything-up-right-now tool, it re-runs AI Research too, unconditionally
+// — see the mergeAiResearch() call below.
 async function main() {
   // Both competitions — a row's own `competition` field picks the right
   // source URLs at research time (see research.js), so every already-
@@ -47,6 +54,9 @@ async function main() {
   // Goals model stays Premier-League-only, same as run.js — see that
   // file's comment for why plFixtures (not the combined list) is passed.
   const teamStrengths = computeTeamGoalStats(plFixtures, xgContext);
+  // Our Elo, same as run.js — computed from BOTH competitions' finished
+  // fixtures at once (see ownElo.js).
+  const ownEloRatings = computeOwnEloRatings(seasonFixtures);
 
   // Same crest self-heal as run.js — free, no extra fetch, since seasonFixtures
   // is already pulled above.
@@ -61,10 +71,17 @@ async function main() {
     const row = await researchFixture(
       { id: r.id, competition: r.competition, home: r.home, away: r.away, kickoffLocal: r.kickoff_local },
       teamStrengths,
-      crestMap
+      crestMap,
+      ownEloRatings
     );
-    refreshed.push(row);
-    console.log(`  ✓ ${r.home} vs ${r.away} — ${row.standout?.pick ?? "n/a"} ${row.standout?.pct != null ? row.standout.pct + "%" : ""}`);
+    // Layer AI Research on top, same as its normal dedicated schedule
+    // would — see the comment above and scraper/lib/aiResearchMerge.js.
+    const { row: withAi, found: aiFound } = await mergeAiResearch(row);
+    refreshed.push(withAi);
+    console.log(
+      `  ✓ ${r.home} vs ${r.away} — ${withAi.standout?.pick ?? "n/a"} ${withAi.standout?.pct != null ? withAi.standout.pct + "%" : ""}` +
+        (aiFound ? " (AI Research updated)" : "")
+    );
   }
 
   const { error: upsertErr } = await supabaseAdmin.from("matches").upsert(refreshed);
