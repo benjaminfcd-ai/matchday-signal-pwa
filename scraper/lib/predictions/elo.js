@@ -89,7 +89,17 @@ const ELO_NAME_CANDIDATES = {
   "Bayern Munich": ["BayernMunich", "FCBayern"],
   "Borussia Dortmund": ["Dortmund", "BorussiaDortmund"],
   "RB Leipzig": ["RBLeipzig", "Leipzig"],
-  "Bayer Leverkusen": ["Leverkusen", "BayerLeverkusen"],
+  // FIX (Sept 2026): this previously listed "Leverkusen" as the first
+  // candidate. That slug does resolve on clubelo.com — but to the GERMANY
+  // NATIONAL TEAM's page, not Bayer Leverkusen's — confirmed by direct
+  // check while adding Bundesliga support below. Because a wrong-but-live
+  // slug returns ok:true with a real-looking "Elo: NNNN" number, this was
+  // silently feeding the wrong team's rating into every Bayer Leverkusen
+  // prediction with no warning anywhere — worse than the "no working slug"
+  // case this module is designed to warn about, since it never triggered
+  // that warning. "Leverkusen" is removed from the candidates entirely
+  // rather than reordered, so this exact silent-wrong-match can't recur.
+  "Bayer Leverkusen": ["BayerLeverkusen", "Bayer04"],
   "Paris Saint-Germain": ["ParisSG", "PSG"],
   "Monaco": ["Monaco"],
   "Marseille": ["Marseille"],
@@ -126,6 +136,51 @@ const ELO_NAME_CANDIDATES = {
   // ClubElo slug yet — left out deliberately rather than guessed. If it
   // shows up in "[elo] no ClubElo slug candidates configured" logs, check
   // clubelo.com directly for its real slug and add it here.
+
+  // Bundesliga (2026-27 season, incl. this year's promoted clubs: Schalke
+  // 04, SV Elversberg, SC Paderborn). "Bayern Munich", "Borussia Dortmund",
+  // and "RB Leipzig" above were directly confirmed against the live site
+  // while adding this league; the rest are the same kind of best-effort,
+  // multi-candidate guesses this file has always used for less-central
+  // clubs — see the Bayer Leverkusen fix above for why a wrong-but-live
+  // guess is worth watching for in the logs, not just a missing one.
+  "VfB Stuttgart": ["Stuttgart", "VfBStuttgart"],
+  "TSG 1899 Hoffenheim": ["Hoffenheim", "TSGHoffenheim"],
+  "SC Freiburg": ["Freiburg", "SCFreiburg"],
+  "1. FSV Mainz 05": ["Mainz", "Mainz05"],
+  "FC Schalke 04": ["Schalke", "Schalke04"],
+  "SV Elversberg": ["Elversberg", "SVElversberg"],
+  "SC Paderborn 07": ["Paderborn", "SCPaderborn"],
+  "1. FC Köln": ["FCKoeln", "Koeln", "Cologne"],
+  "SV Werder Bremen": ["Werder", "WerderBremen", "Bremen"],
+  "Hamburger SV": ["Hamburg", "HamburgerSV", "HSV"],
+  "1. FC Union Berlin": ["Union", "UnionBerlin"],
+  "FC Augsburg": ["Augsburg"],
+  "Borussia Mönchengladbach": ["Gladbach", "MGladbach", "BorussiaMG"],
+  "Eintracht Frankfurt": ["EintFrankfurt", "Frankfurt"],
+
+  // La Liga (2026-27 season, incl. this year's promoted clubs: Racing
+  // Santander, Deportivo La Coruña, Málaga). "Real Madrid" and "Barcelona"
+  // above were directly confirmed against the live site while adding this
+  // league; the rest are best-effort guesses, same caveat as Bundesliga's
+  // list above.
+  "Athletic Club": ["AthBilbao", "Bilbao", "Athletic"],
+  "Real Sociedad": ["Sociedad", "RealSociedad"],
+  "Real Betis": ["Betis", "RealBetis"],
+  "Villarreal": ["Villarreal"],
+  "Sevilla": ["Sevilla"],
+  "Valencia": ["Valencia"],
+  "Celta Vigo": ["Celta"],
+  "Osasuna": ["Osasuna"],
+  "Getafe": ["Getafe"],
+  "Alaves": ["Alaves"],
+  "Rayo Vallecano": ["Rayo", "RayoVallecano"],
+  "Espanyol": ["Espanyol"],
+  "Levante": ["Levante"],
+  "Elche": ["Elche"],
+  "Racing Santander": ["Racing", "RacingSantander"],
+  "Deportivo La Coruna": ["Deportivo", "DepLaCoruna"],
+  "Malaga": ["Malaga"],
 };
 
 const eloCache = new Map(); // slug candidates key -> elo number, per run.js process
