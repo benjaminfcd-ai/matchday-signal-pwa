@@ -137,4 +137,4 @@ export function midweekWindow(nowIct = new Date()) {
   const fridayAfter = new Date(monday);
   fridayAfter.setUTCDate(monday.getUTCDate() + 4); // through end of Thursday
   return { start: monday, end: fridayAfter };
-}=
+}
