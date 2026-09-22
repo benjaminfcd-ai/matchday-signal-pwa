@@ -215,12 +215,37 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
     const key = `${f.competition}|${f.kickoffLocal}`;
     byKickoff.set(key, byKickoff.has(key) ? undefined : f); // undefined marks a collision
   }
+  // Third fallback, tried last: (competition, home, away) alone, ignoring
+  // both id and kickoff time. Added Sept 2026 after a real fixture (La
+  // Liga, Real Sociedad vs Celta Vigo) got stuck showing "Live" for
+  // several days — neither byId nor byKickoff resolved it, most likely
+  // because its kickoff time drifted slightly (a reschedule) at the same
+  // time as an id-affecting change, so both of the above missed it
+  // simultaneously. Two clubs playing each other can't appear twice within
+  // one competition's current round, so this is safe whenever it resolves
+  // to exactly one fixture — same collision-guard pattern as byKickoff.
+  const byTeams = new Map();
+  for (const f of seasonFixtures) {
+    const key = `${f.competition}|${f.home}|${f.away}`;
+    byTeams.set(key, byTeams.has(key) ? undefined : f);
+  }
 
   const updates = [];
   const stillUnresolved = [];
   for (const row of currentRows) {
     if (row.status === "finished") continue;
-    const fresh = byId.get(row.id) || byKickoff.get(`${row.competition}|${row.kickoff_local}`);
+    // Already recorded as postponed on an earlier run — leave it alone.
+    // It's excluded from research (see main()'s toResearch filter, which
+    // only ever picks up "upcoming" rows) and won't block this round from
+    // archiving (see archiveIfComplete() below); it naturally drops out of
+    // the table entirely once the round archives, and reappears on its own
+    // as an ordinary fixture if/when football-data.org gives it a
+    // confirmed new date (see the postponed comment in fixtures.js).
+    if (row.status === "postponed") continue;
+    const fresh =
+      byId.get(row.id) ||
+      byKickoff.get(`${row.competition}|${row.kickoff_local}`) ||
+      byTeams.get(`${row.competition}|${row.home}|${row.away}`);
     if (fresh && fresh.status === "finished") {
       updates.push({
         ...row,
@@ -229,12 +254,24 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
         standout: { market: "—", pick: `Match complete — ${fresh.score}`, pct: null, source: null, note: "Result recorded for round completeness." },
         updated_at: new Date().toISOString(),
       });
+    } else if (fresh && fresh.status === "postponed") {
+      // Real postponement (or suspension/cancellation — see fixtures.js) —
+      // stop treating this row as "upcoming at kickoff_local", since that
+      // time is now stale. Doesn't touch probs/extras, so if it later gets
+      // rescheduled and researched again under a fresh matchday pass, the
+      // old readings just get overwritten the normal way.
+      updates.push({
+        ...row,
+        status: "postponed",
+        standout: { market: "—", pick: "Postponed", pct: null, source: null, note: "New date not yet confirmed." },
+        updated_at: new Date().toISOString(),
+      });
     } else if (hoursUntil(row.kickoff_local) < -3) {
       // Kickoff was more than 3 hours ago and this row still can't be
-      // resolved to a finished fixture by either id or kickoff time —
-      // flag it instead of failing silently, so a fixture stuck showing
-      // "Live" on the site has a matching line in these logs to
-      // investigate (either football-data.org hasn't marked it FINISHED
+      // resolved to a finished (or postponed) fixture by id, kickoff time,
+      // or team names — flag it instead of failing silently, so a fixture
+      // stuck showing "Live" on the site has a matching line in these logs
+      // to investigate (either football-data.org hasn't marked it FINISHED
       // yet, or it's genuinely dropped out of the fetched fixture list).
       stillUnresolved.push(`${row.home} vs ${row.away} (${row.competition}, id=${row.id}, kickoff=${row.kickoff_local})`);
     }
@@ -357,25 +394,48 @@ async function ensureRoundExists(competition, seasonFixtures) {
   return true;
 }
 
-// Archives this competition's round once every fixture in it has finished
-// (leaves it open if anything's still pending, e.g. a postponement).
+// Archives this competition's round once every fixture in it is DECIDED —
+// meaning "finished" or "postponed" (see fixtures.js and
+// finalizeFinishedFixtures() above for what "postponed" covers). A
+// postponed fixture doesn't hold the round open the way it used to: it's
+// left out of the archived snapshot entirely (never shown in "Past
+// rounds" — see pages/index.js and README's "Postponed fixtures" note)
+// and just drops out of the live table along with the rest of the round
+// when it's deleted below. It isn't lost — if/when football-data.org gives
+// it a confirmed new date, it comes back through the normal pipeline as
+// its own small round once it's actually played (see the comment on
+// POSTPONED_STATUSES in fixtures.js for why this is safe).
 async function archiveIfComplete(competition) {
   const { data: freshRows, error } = await supabaseAdmin.from("matches").select("*").eq("competition", competition);
   if (error) throw error;
   if (!freshRows || freshRows.length === 0) return;
 
-  const stillUpcoming = freshRows.filter((r) => r.status !== "finished");
-  if (stillUpcoming.length > 0) return;
+  const stillUndecided = freshRows.filter((r) => r.status === "upcoming");
+  if (stillUndecided.length > 0) return;
+
+  const playedRows = freshRows.filter((r) => r.status === "finished");
+  const postponedRows = freshRows.filter((r) => r.status === "postponed");
+  // Everything in the round is postponed and nothing has actually been
+  // played yet — extremely rare (e.g. a whole matchday moved for an
+  // international break), but there's nothing real to archive here, so
+  // just leave the round open rather than writing an empty archived entry.
+  if (playedRows.length === 0) return;
 
   const { data: metaRow } = await supabaseAdmin.from("meta").select("*").eq("id", metaId(competition)).maybeSingle();
   await supabaseAdmin.from("archived_rounds").insert({
     round_label: metaRow?.round_label || competitionLabel(competition),
-    matches: freshRows,
+    matches: playedRows,
     competition,
     archived_at: new Date().toISOString(),
   });
   await supabaseAdmin.from("matches").delete().eq("competition", competition);
-  console.log(`${competitionLabel(competition)} round complete — archived ${freshRows.length} fixture(s).`);
+  console.log(
+    `${competitionLabel(competition)} round complete — archived ${playedRows.length} fixture(s)` +
+      (postponedRows.length
+        ? ` (${postponedRows.length} postponed fixture(s) left out of the archive — will resurface once rescheduled)`
+        : "") +
+      "."
+  );
 }
 
 async function main() {
