@@ -234,14 +234,6 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
   const stillUnresolved = [];
   for (const row of currentRows) {
     if (row.status === "finished") continue;
-    // Already recorded as postponed on an earlier run — leave it alone.
-    // It's excluded from research (see main()'s toResearch filter, which
-    // only ever picks up "upcoming" rows) and won't block this round from
-    // archiving (see archiveIfComplete() below); it naturally drops out of
-    // the table entirely once the round archives, and reappears on its own
-    // as an ordinary fixture if/when football-data.org gives it a
-    // confirmed new date (see the postponed comment in fixtures.js).
-    if (row.status === "postponed") continue;
     const fresh =
       byId.get(row.id) ||
       byKickoff.get(`${row.competition}|${row.kickoff_local}`) ||
@@ -266,13 +258,60 @@ async function finalizeFinishedFixtures(currentRows, seasonFixtures) {
         standout: { market: "—", pick: "Postponed", pct: null, source: null, note: "New date not yet confirmed." },
         updated_at: new Date().toISOString(),
       });
-    } else if (hoursUntil(row.kickoff_local) < -3) {
+    } else if (
+      fresh &&
+      fresh.status === "upcoming" &&
+      (fresh.kickoffLocal !== row.kickoff_local || row.status === "postponed")
+    ) {
+      // A genuine reschedule to a new date/time while still "upcoming" —
+      // covers two real cases: (1) a fixture that skipped straight from its
+      // old kickoff to a newly-confirmed one without football-data.org ever
+      // reporting an intermediate POSTPONED status in between (this is what
+      // actually happened to La Liga's Levante vs Athletic Club — it never
+      // showed as postponed here, it just sat stale, because this branch
+      // didn't exist yet), and (2) a row THIS project had already marked
+      // "postponed" that has now been given a confirmed new date, matching
+      // the behavior promised in fixtures.js's POSTPONED_STATUSES comment.
+      // Either way the fix is the same: adopt the fresh kickoff time so the
+      // site stops showing a stale "Live"/"result pending" badge for a
+      // match that's actually scheduled again in the future — it re-enters
+      // its own RESEARCH_WINDOW_HOURS window automatically once that new
+      // date is close (see main()), no different from any other fixture.
+      updates.push({
+        ...row,
+        status: "upcoming",
+        kickoff_local: fresh.kickoffLocal,
+        home_crest: fresh.homeCrest || row.home_crest,
+        away_crest: fresh.awayCrest || row.away_crest,
+        // A row that had been sitting as "postponed" carries a stale
+        // "Postponed" standout box and no probs — clear those out to an
+        // honest "not yet analyzed" placeholder rather than leaving
+        // postponement text showing under a match that's upcoming again.
+        // A row that was never postponed (just silently stale) keeps its
+        // existing standout/probs untouched, since those are still
+        // meaningful predictions for the same fixture.
+        ...(row.status === "postponed"
+          ? {
+              standout: { market: "—", pick: "Not yet analyzed", pct: null, source: null, note: "Rescheduled — checked closer to the new kickoff." },
+              probs: [],
+              extras: [],
+              agreement: null,
+              agreement_note: "Rescheduled — checked closer to the new kickoff.",
+            }
+          : {}),
+        updated_at: new Date().toISOString(),
+      });
+    } else if (row.status !== "postponed" && hoursUntil(row.kickoff_local) < -3) {
       // Kickoff was more than 3 hours ago and this row still can't be
-      // resolved to a finished (or postponed) fixture by id, kickoff time,
-      // or team names — flag it instead of failing silently, so a fixture
-      // stuck showing "Live" on the site has a matching line in these logs
-      // to investigate (either football-data.org hasn't marked it FINISHED
-      // yet, or it's genuinely dropped out of the fetched fixture list).
+      // resolved to a finished (or postponed/rescheduled) fixture by id,
+      // kickoff time, or team names — flag it instead of failing silently,
+      // so a fixture stuck showing "Live" on the site has a matching line
+      // in these logs to investigate (either football-data.org hasn't
+      // marked it FINISHED yet, or it's genuinely dropped out of the
+      // fetched fixture list). A row already "postponed" is excluded here
+      // deliberately — its stored kickoff_local is expected to be stale
+      // until a real reschedule is found above, so it isn't a bug worth
+      // logging every run.
       stillUnresolved.push(`${row.home} vs ${row.away} (${row.competition}, id=${row.id}, kickoff=${row.kickoff_local})`);
     }
   }
