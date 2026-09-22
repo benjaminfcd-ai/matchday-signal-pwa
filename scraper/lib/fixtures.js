@@ -15,6 +15,7 @@ const API_BASE = "https://api.football-data.org/v4";
 // includes the UEFA Champions League alongside the "big 5" domestic
 // leagues), so no second API key or paid plan is needed for CL support.
 const COMPETITION_CODES = { PL: "PL", CL: "CL", BL1: "BL1", PD: "PD" };
+const POSTPONED_STATUSES = new Set(["POSTPONED", "SUSPENDED", "CANCELLED"]);
 
 function toIctIso(utcDateIso) {
   // utcDateIso is an ISO string with a Z, e.g. "2026-09-05T19:00:00Z".
@@ -64,6 +65,19 @@ export async function fetchSeasonFixtures(competition = "PL") {
       const home = canonicalTeam(m.homeTeam?.name || m.homeTeam?.shortName || "");
       const away = canonicalTeam(m.awayTeam?.name || m.awayTeam?.shortName || "");
       const finished = m.status === "FINISHED";
+      // football-data.org's own status values (SCHEDULED, TIMED, IN_PLAY,
+      // PAUSED, FINISHED, POSTPONED, SUSPENDED, CANCELLED, AWARDED) collapse
+      // into three buckets this project actually distinguishes.
+      // POSTPONED/SUSPENDED/CANCELLED are all treated the same way — from
+      // this project's side the actionable fact is identical either way:
+      // this fixture is NOT going to finish on its originally scheduled
+      // date, so its stored kickoff time is now stale and it shouldn't
+      // block its round from wrapping up (see run.js's
+      // finalizeFinishedFixtures() and archiveIfComplete()). If a
+      // postponed match later gets a confirmed new date, football-data.org
+      // flips its status back to SCHEDULED/TIMED on its own, and it simply
+      // reappears here as an ordinary "upcoming" fixture again next run.
+      const postponed = !finished && POSTPONED_STATUSES.has(m.status);
       const homeScore = m.score?.fullTime?.home;
       const awayScore = m.score?.fullTime?.away;
       const dateTag = m.utcDate.slice(0, 10).replace(/-/g, "").slice(2);
@@ -79,7 +93,7 @@ export async function fetchSeasonFixtures(competition = "PL") {
         homeCrest: m.homeTeam?.crest || null,
         awayCrest: m.awayTeam?.crest || null,
         kickoffLocal: toIctIso(m.utcDate),
-        status: finished ? "finished" : "upcoming",
+        status: finished ? "finished" : postponed ? "postponed" : "upcoming",
         score: finished && homeScore != null && awayScore != null
           ? `${homeScore}–${awayScore}`
           : null,
