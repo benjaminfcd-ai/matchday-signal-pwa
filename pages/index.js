@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Head from "next/head";
 import { supabase } from "../lib/supabaseClient";
-import { computeRoundAccuracy } from "../lib/results";
+import { computeRoundAccuracy, gradePrediction } from "../lib/results";
 
 const TZ = "Asia/Ho_Chi_Minh";
 
@@ -28,6 +28,22 @@ const HIDE_ACCURACY_FOR_ROUNDS = new Set([
   "Champions League · 2026-09-08 – 2026-09-10",
 ]);
 const AGREE_LABEL = { good: "Models agree", warn: "Models lean, not sure", bad: "Models conflict", split: "Split, tight" };
+
+// A fixture stays "upcoming" in the database until the scraper's next run
+// finalizes it (see finalizeFinishedFixtures in scraper/run.js) — normally
+// within 3 hours of full time. This buffer is deliberately generous (90
+// min play + stoppage/extra time + a walkout margin) so a match that's
+// genuinely still being played keeps showing "Live"; past it, "Live" would
+// be actively misleading (implying we're tracking it in real time, which
+// this project never does — no live-score source exists here), so the
+// card instead shows an honest "awaiting result" state. This is purely a
+// display fallback for the rare lag between full time and the next scrape
+// — see run.js's new byTeams matching fallback for the actual fix to the
+// underlying case (a stuck fixture that never gets picked up at all).
+const MATCH_LIVE_BUFFER_MIN = 150;
+function minutesSinceKickoff(kickoffIso) {
+  return (Date.now() - new Date(kickoffIso).getTime()) / 60000;
+}
 
 function fmtTime(iso) {
   try {
@@ -161,7 +177,20 @@ function ProbBars({ p, home, away }) {
 const FEATURED_SOURCES = ["Opta Analyst", "Wincomparator", "AI Research (multi-source)"];
 
 function MatchCard({ m, open, onToggle }) {
-  const isLive = m.status === "upcoming" && new Date(m.kickoffLocal).getTime() < Date.now();
+  const minsSinceKickoff = m.status === "upcoming" ? minutesSinceKickoff(m.kickoffLocal) : null;
+  const isLive = minsSinceKickoff != null && minsSinceKickoff >= 0 && minsSinceKickoff <= MATCH_LIVE_BUFFER_MIN;
+  const isAwaitingResult = minsSinceKickoff != null && minsSinceKickoff > MATCH_LIVE_BUFFER_MIN;
+  // Reconstructs and grades "Our Prediction" from this match's raw source
+  // readings once it's finished — see gradePrediction() in lib/results.js
+  // for why (the scraper overwrites the display standout text with a plain
+  // "Match complete — score" the moment a fixture finishes, but leaves
+  // `probs` untouched). null for a finished fixture that was never
+  // actually researched — that fixture just falls back to the plain
+  // "Match complete" box below, same as before this feature existed.
+  const grade = m.status === "finished" ? gradePrediction(m) : null;
+  const predictedText = grade
+    ? grade.predicted === "draw" ? "Draw" : `${grade.predicted === "home" ? m.home : m.away} to win`
+    : null;
   const featured = FEATURED_SOURCES
     .map((name) => (m.probs || []).find((p) => p.source === name))
     .filter(Boolean);
@@ -178,14 +207,20 @@ function MatchCard({ m, open, onToggle }) {
           <div className="meta-line">
             {m.status === "finished"
               ? "Full time"
+              : m.status === "postponed"
+              ? "Postponed — new date to be confirmed"
               : `${fmtDate(m.kickoffLocal)} · ${fmtTime(m.kickoffLocal)} ICT`}
           </div>
         </div>
         <div className="head-right">
           {m.status === "finished" ? (
             <span className="status-chip">Final {m.score || ""}</span>
+          ) : m.status === "postponed" ? (
+            <span className="status-chip postponed">Postponed</span>
           ) : isLive ? (
             <span className="status-chip live">Live</span>
+          ) : isAwaitingResult ? (
+            <span className="status-chip pending">Full time — result pending</span>
           ) : null}
           {m.agreement && (
             <span className={`agree-chip ${m.agreement}`}>{AGREE_LABEL[m.agreement] || m.agreement}</span>
@@ -196,22 +231,54 @@ function MatchCard({ m, open, onToggle }) {
         </div>
       </div>
       <div className="match-body">
-        {m.standout && m.standout.pick && (
-          <div className="standout">
-            <div className="label">Our Prediction</div>
-            <div className="pick">
-              {m.standout.pick}
-              {m.standout.pct != null ? ` — ${m.standout.pct}%` : ""}
-            </div>
-            {m.standout.totalSources > 0 && (
-              <div className="consensus-line">
-                {m.standout.sourcesUsed === m.standout.totalSources
-                  ? `All ${m.standout.totalSources} sources checked agree on this`
-                  : `${m.standout.sourcesUsed} of ${m.standout.totalSources} sources checked favor this`}
+        {m.status === "finished" ? (
+          grade ? (
+            <div className={`standout result ${grade.correct ? "win" : "loss"}`}>
+              <div className="label">
+                Our Prediction
+                <span className={`result-chip ${grade.correct ? "win" : "loss"}`}>
+                  {grade.correct ? "✓ Correct" : "✗ Incorrect"}
+                </span>
               </div>
-            )}
-            {m.standout.note && <div className="note">{m.standout.note}</div>}
+              <div className="pick">Predicted {predictedText} — final score {m.score}</div>
+            </div>
+          ) : (
+            m.standout && m.standout.pick && (
+              <div className="standout">
+                <div className="label">Result</div>
+                <div className="pick">{m.standout.pick}</div>
+                <div className="note">This fixture finished without ever being researched, so there's no original prediction to grade.</div>
+              </div>
+            )
+          )
+        ) : m.status === "postponed" ? (
+          <div className="standout postponed-note">
+            <div className="label">Postponed</div>
+            <div className="pick">New date not yet confirmed</div>
+            <div className="note">
+              football-data.org hasn't posted a new kickoff time yet — this fixture will disappear from here and
+              reappear as an ordinary upcoming match once it has one. Any predictions below are from before the
+              postponement and may no longer be current.
+            </div>
           </div>
+        ) : (
+          m.standout && m.standout.pick && (
+            <div className="standout">
+              <div className="label">Our Prediction</div>
+              <div className="pick">
+                {m.standout.pick}
+                {m.standout.pct != null ? ` — ${m.standout.pct}%` : ""}
+              </div>
+              {m.standout.totalSources > 0 && (
+                <div className="consensus-line">
+                  {m.standout.sourcesUsed === m.standout.totalSources
+                    ? `All ${m.standout.totalSources} sources checked agree on this`
+                    : `${m.standout.sourcesUsed} of ${m.standout.totalSources} sources checked favor this`}
+                </div>
+              )}
+              {m.standout.note && <div className="note">{m.standout.note}</div>}
+            </div>
+          )
         )}
         {m.probs && m.probs.length > 0 ? (
           <>
@@ -262,7 +329,11 @@ function Hero({ matches }) {
   // "Highest single reading" long after the result is known. Requiring
   // m.probs.length too just rules out untouched "Not yet analyzed"
   // placeholders, which couldn't produce a reading anyway.
-  const candidates = matches.filter((m) => m.status !== "finished" && m.probs.length);
+  // Deliberately "upcoming" only, not "!== finished" — a postponed fixture
+  // may still carry probs from before it was postponed, and those are now
+  // stale against an unknown future kickoff, so it shouldn't be eligible
+  // to headline the hero.
+  const candidates = matches.filter((m) => m.status === "upcoming" && m.probs.length);
   // "Most agreed-upon" — m.agreement === "good" already means every source
   // checked favored the same side with decent average confidence (see
   // scraper/lib/agreement.js), so this needs no extra unanimity flag.
@@ -534,8 +605,15 @@ export default function Home() {
     () => archived.filter((r) => (r.competition || "PL") === competition),
     [archived, competition]
   );
-  const upcoming = sorted.filter((m) => m.status !== "finished");
+  const upcoming = sorted.filter((m) => m.status === "upcoming");
   const past = sorted.filter((m) => m.status === "finished");
+  // Shown in their own always-visible section, separate from the day-tab
+  // filtered upcoming list — a postponed fixture's stored kickoff time is
+  // stale (see run.js's finalizeFinishedFixtures), so it doesn't belong to
+  // any real day tab, and it's deliberately excluded from "Past rounds"
+  // once the round archives (see archiveIfComplete in scraper/run.js) —
+  // this is the only place it's still visible on the site at all.
+  const postponed = sorted.filter((m) => m.status === "postponed");
 
   // task 1a — one tab per distinct matchday among the upcoming fixtures,
   // e.g. "Sat 12 Sept" / "Sun 13 Sept". Derived fresh from `upcoming` each
@@ -660,6 +738,15 @@ export default function Home() {
                   </div>
                 )}
               </div>
+
+              {postponed.length > 0 && (
+                <>
+                  <div className="section-label">Postponed — new date not yet confirmed</div>
+                  <div className="matches">
+                    {postponed.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
+                  </div>
+                </>
+              )}
 
               <p className="footer-note">
                 This page updates itself automatically — a scheduled job checks every fixture every 3 hours and (re-)researches it once it's within 12 hours of kickoff, writing straight to the database behind this page, so every open tab refreshes live with no button to press. AI Research specifically checks in more often as kickoff nears — every 2 hours, once a fixture is within 6 hours of its own kickoff — since that's the window where team news and lineups actually change. As soon as a fixture is confirmed finished, it moves straight into the <b>Past rounds</b> tab — that round's accuracy percentage only appears there once every fixture in it has been played.
