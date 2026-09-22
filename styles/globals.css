@@ -193,6 +193,16 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .agree-chip.split { background: var(--accent-soft); color: var(--accent); }
 .status-chip { background: var(--surface-2); color: var(--text-muted); }
 .status-chip.live { background: var(--bad-soft); color: var(--bad); }
+/* Kickoff has passed but this fixture still isn't finalized (see
+   MATCH_LIVE_BUFFER_MIN in pages/index.js) — deliberately neutral, not red
+   like .live, since this is a "we don't know yet" state, not an
+   in-progress one. */
+.status-chip.pending { background: var(--surface-2); color: var(--text-faint); }
+/* A genuine postponement/suspension/cancellation (see POSTPONED_STATUSES in
+   scraper/lib/fixtures.js) — amber, distinct from both .live (red) and
+   .pending (grey), since this is a definite, known state rather than
+   "still playing" or "we don't know yet". */
+.status-chip.postponed { background: var(--warn-soft); color: var(--warn); }
 
 .chev { color: var(--text-faint); transition: transform 0.15s; flex-shrink: 0; }
 .match.open .chev { transform: rotate(180deg); }
@@ -201,10 +211,34 @@ main { padding: 28px clamp(16px, 4vw, 40px) 60px; max-width: 980px; }
 .match.open .match-body { display: block; padding-top: 14px; }
 
 .standout { background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
-.standout .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); font-weight: 700; margin-bottom: 4px; }
+.standout .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
 .standout .pick { font-size: 14px; font-weight: 700; }
 .standout .consensus-line { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .standout .note { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+
+/* Win/loss verdict on a finished fixture's "Our Prediction" — reconstructed
+   and graded client-side (see gradePrediction() in lib/results.js). A
+   correct call gets the same green language as everywhere else on the site
+   (.agree-chip.good, .accuracy-chip.good); an incorrect one deliberately
+   drops back to a plain, unhighlighted card rather than a "bad" red —
+   losing a single match-winner call isn't a failure worth flagging in
+   alarm color, just something not worth highlighting. */
+.standout.result.win { background: var(--good-soft); }
+.standout.result.win .label { color: var(--good); }
+.standout.result.loss { background: var(--surface); border: 1px solid var(--border); }
+.standout.result.loss .label { color: var(--text-faint); }
+.result-chip {
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  text-transform: none; letter-spacing: normal;
+}
+.result-chip.win { background: var(--good-soft); color: var(--good); }
+.result-chip.loss { background: var(--surface-2); color: var(--text-faint); }
+
+/* Postponed-fixture card — plain, same "nothing to highlight" treatment as
+   a losing prediction, just with an amber label instead of grey, since a
+   postponement is a known fact rather than an outcome to stay neutral on. */
+.standout.postponed-note { background: var(--surface); border: 1px solid var(--border); }
+.standout.postponed-note .label { color: var(--warn); }
 
 .probs { display: flex; flex-direction: column; gap: 10px; }
 .prob-row { display: flex; flex-direction: column; gap: 5px; }
