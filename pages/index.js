@@ -321,14 +321,16 @@ function MatchCard({ m, open, onToggle }) {
   );
 }
 
-// A rescheduled fixture whose new kickoff lands more than this many days
-// after the rest of its round has already been played doesn't really
-// belong to "this round" anymore in any meaningful sense — see the
+// A fixture whose (possibly rescheduled) kickoff is still more than this
+// many days away doesn't belong on "this round's" page yet — see the
 // isFarOutReschedule() comment in Home() below for the full reasoning.
 // Duplicated here (rather than imported) since Hero gets its own `matches`
 // prop rather than the Home component's derived state — same small-local-
 // copy pattern this file already uses for favoredSide().
 const FAR_OUT_RESCHEDULE_DAYS = 10;
+function isFarOutReschedule(m) {
+  return new Date(m.kickoffLocal).getTime() - Date.now() > FAR_OUT_RESCHEDULE_DAYS * 24 * 60 * 60 * 1000;
+}
 
 function Hero({ matches }) {
   // Highlights are for what's still to come. A finished match keeps its
@@ -342,23 +344,13 @@ function Hero({ matches }) {
   // may still carry probs from before it was postponed, and those are now
   // stale against an unknown future kickoff, so it shouldn't be eligible
   // to headline the hero.
-  const latestFinishedMs = matches.reduce((max, m) => {
-    if (m.status !== "finished") return max;
-    const t = new Date(m.kickoffLocal).getTime();
-    return t > max ? t : max;
-  }, 0);
   const candidates = matches.filter((m) => {
     if (m.status !== "upcoming" || !m.probs.length) return false;
     // Same far-out-reschedule exclusion as the main Upcoming list (see
-    // Home()) — a fixture that got pushed a month past the rest of its
-    // round shouldn't headline "this round's" hero with stale pre-
-    // postponement readings.
-    if (
-      latestFinishedMs > 0 &&
-      new Date(m.kickoffLocal).getTime() - latestFinishedMs > FAR_OUT_RESCHEDULE_DAYS * 24 * 60 * 60 * 1000
-    ) {
-      return false;
-    }
+    // Home()) — a fixture that got pushed weeks past the rest of its round
+    // shouldn't headline "this round's" hero with stale pre-postponement
+    // readings.
+    if (isFarOutReschedule(m)) return false;
     return true;
   });
   // "Most agreed-upon" — m.agreement === "good" already means every source
@@ -637,32 +629,21 @@ export default function Home() {
   // adopts a fresh kickoff time the moment football-data.org confirms one,
   // even when the fixture skipped straight to a new date without ever
   // reporting an intermediate POSTPONED status) is still genuinely
-  // "upcoming" and its date is real, not stale — but mixing it into "This
-  // round's signal" next to a round where everything else already
-  // finished weeks ago is confusing (e.g. a Sept 3–17 round showing one
-  // match still "to come" in late October). It gets pulled into its own
-  // section below instead — nothing is hidden, per this project's hard
-  // "never fabricate/never lose data" rule, it's a display grouping
-  // decision only. The threshold is "more than FAR_OUT_RESCHEDULE_DAYS
-  // after the latest fixture that's already been played in this round" —
-  // so a completely fresh round, where nothing has finished yet, is never
-  // affected by this (every fixture in it is legitimately upcoming
-  // together).
-  const FAR_OUT_RESCHEDULE_DAYS = 10;
-  const latestFinishedMs = sorted.reduce((max, m) => {
-    if (m.status !== "finished") return max;
-    const t = new Date(m.kickoffLocal).getTime();
-    return t > max ? t : max;
-  }, 0);
-  const isFarOutReschedule = (m) =>
-    latestFinishedMs > 0 &&
-    new Date(m.kickoffLocal).getTime() - latestFinishedMs > FAR_OUT_RESCHEDULE_DAYS * 24 * 60 * 60 * 1000;
-
+  // "upcoming" and its date is real, not stale — but it isn't within its
+  // game period yet, so it's left off "This round's signal" entirely for
+  // now (per Ben's request) rather than shown mixed in, or even in its own
+  // section, next to a round where everything else already finished weeks
+  // ago. Nothing is hidden from the SITE as a whole — this fixture still
+  // exists in the database untouched and will show up here on its own
+  // once its real kickoff is within FAR_OUT_RESCHEDULE_DAYS, exactly like
+  // any other upcoming match; it also still finishes and gets graded into
+  // "Past rounds" normally whenever it's actually played. This is a
+  // display-only decision — see isFarOutReschedule() above Hero(), which
+  // this mirrors, for the shared distance-from-now threshold. A
+  // completely fresh round is never affected by this, since every
+  // fixture in a freshly-created round already kicks off within a few
+  // days of now.
   const upcoming = sorted.filter((m) => m.status === "upcoming" && !isFarOutReschedule(m));
-  // Its own always-visible section — same idea as `postponed` below, just
-  // for a fixture that already HAS a confirmed new date rather than one
-  // still waiting for one.
-  const rescheduled = sorted.filter((m) => m.status === "upcoming" && isFarOutReschedule(m));
   const past = sorted.filter((m) => m.status === "finished");
   // Shown in their own always-visible section, separate from the day-tab
   // filtered upcoming list — a postponed fixture's stored kickoff time is
@@ -801,15 +782,6 @@ export default function Home() {
                   <div className="section-label">Postponed — new date not yet confirmed</div>
                   <div className="matches">
                     {postponed.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
-                  </div>
-                </>
-              )}
-
-              {rescheduled.length > 0 && (
-                <>
-                  <div className="section-label">Rescheduled — new date confirmed</div>
-                  <div className="matches">
-                    {rescheduled.map((m) => <MatchCard key={m.id} m={m} open={openId === m.id} onToggle={toggle} />)}
                   </div>
                 </>
               )}
