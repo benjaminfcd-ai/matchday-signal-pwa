@@ -97,6 +97,19 @@ function hoursUntil(kickoffIso, fromMs = Date.now()) {
   return (new Date(kickoffIso).getTime() - fromMs) / (60 * 60 * 1000);
 }
 
+// Mirrors pages/index.js's FAR_OUT_RESCHEDULE_DAYS/isFarOutReschedule (kept
+// as a small local copy rather than a shared import — same pattern this
+// project already uses elsewhere, e.g. metaId()/standingsId() vs the app's
+// own copies). A fixture whose kickoff is still this many days out doesn't
+// belong to whatever round it's nominally grouped under anymore — see
+// archiveIfComplete() below for what that means for round completion, and
+// keep this threshold in sync with the frontend's copy so "still holding
+// this round open" and "still hidden from this round's page" always agree.
+const FAR_OUT_RESCHEDULE_DAYS = 10;
+function isFarOutReschedule(row) {
+  return hoursUntil(row.kickoff_local) > FAR_OUT_RESCHEDULE_DAYS * 24;
+}
+
 // The meta table keeps the existing Premier League row's id ("status")
 // completely unchanged — zero migration risk for the app's existing reads
 // — and every other competition gets its own row at "status_<CODE>"
@@ -153,13 +166,19 @@ function stageLabel(stage) {
 // Prefers the real matchday number (see the top-of-file comment); falls
 // back to the old Fri–Sun/Mon–Thu calendar-window guess only when nothing
 // upcoming carries a matchday number at all.
-function pickRoundFixtures(competition, seasonFixtures, ref) {
+// `archivedIds` (added alongside the far-out-reschedule handling in
+// archiveIfComplete()) is the set of fixture ids already sitting inside a
+// PAST archived_rounds snapshot for this competition — see the comment on
+// this parameter in ensureRoundExists() for the resurrection bug it exists
+// to prevent. Defaults to an empty set so every other caller/behavior is
+// unchanged.
+function pickRoundFixtures(competition, seasonFixtures, ref, archivedIds = new Set()) {
   const upcomingWithMatchday = seasonFixtures.filter((f) => f.status === "upcoming" && f.matchday != null);
 
   if (upcomingWithMatchday.length > 0) {
     const nextMatchday = Math.min(...upcomingWithMatchday.map((f) => f.matchday));
     const windowFixtures = seasonFixtures
-      .filter((f) => f.matchday === nextMatchday)
+      .filter((f) => f.matchday === nextMatchday && !archivedIds.has(f.id))
       .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
     return { windowFixtures, matchday: nextMatchday, stage: windowFixtures[0]?.stage || null };
   }
@@ -168,7 +187,7 @@ function pickRoundFixtures(competition, seasonFixtures, ref) {
   const windowFixtures = seasonFixtures
     .filter((f) => {
       const t = new Date(f.kickoffLocal).getTime();
-      return t >= start.getTime() && t < end.getTime();
+      return t >= start.getTime() && t < end.getTime() && !archivedIds.has(f.id);
     })
     .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
   return { windowFixtures, matchday: null, stage: windowFixtures[0]?.stage || null };
@@ -366,7 +385,29 @@ async function ensureRoundExists(competition, seasonFixtures) {
     return false; // a round already exists for this competition — nothing to do, whether it's finished or not (archiveIfComplete handles retirement)
   }
 
-  const { windowFixtures, matchday, stage } = pickRoundFixtures(competition, seasonFixtures, nowIct());
+  // Every fixture id already sitting inside a PAST archived_rounds snapshot
+  // for this competition — passed into pickRoundFixtures() so it can never
+  // pick one of them back up. Without this guard, a fixture that shares its
+  // matchday number with an already-graded round — a postponed fixture
+  // finally given a new date, or a far-out reschedule left out of the
+  // archive on purpose (see archiveIfComplete() below) — would, the moment
+  // it re-enters `upcomingWithMatchday`, make pickRoundFixtures() treat that
+  // whole matchday as "the next round" again and pull every already-
+  // archived fixture sharing that number back in too. Those then get mapped
+  // through placeholderFixture() below, which unconditionally sets
+  // `status: "upcoming"` — silently overwriting graded results that are
+  // sitting safely in archived_rounds with blank "Not yet analyzed" rows.
+  // This is exactly the class of bug documented at the top of
+  // ensureRoundExists() below (the old "allPast" auto-archive-and-recreate
+  // logic) — same failure mode, different trigger.
+  const { data: archivedRows, error: archErr } = await supabaseAdmin
+    .from("archived_rounds")
+    .select("matches")
+    .eq("competition", competition);
+  if (archErr) throw archErr;
+  const archivedIds = new Set((archivedRows || []).flatMap((r) => (r.matches || []).map((m) => m.id)));
+
+  const { windowFixtures, matchday, stage } = pickRoundFixtures(competition, seasonFixtures, nowIct(), archivedIds);
   console.log(
     matchday != null
       ? `${competitionLabel(competition)} next round: Matchday ${matchday} (${windowFixtures.length} fixture(s))`
@@ -449,15 +490,28 @@ async function archiveIfComplete(competition) {
   if (error) throw error;
   if (!freshRows || freshRows.length === 0) return;
 
-  const stillUndecided = freshRows.filter((r) => r.status === "upcoming");
+  // A fixture that's still technically "upcoming" but has been rescheduled
+  // well past the rest of its round (see finalizeFinishedFixtures()'s
+  // reschedule branch, and pages/index.js's matching frontend rule) gets
+  // the exact same treatment a genuinely postponed fixture already gets
+  // below: it doesn't hold the round open, and it's left out of the
+  // archived snapshot rather than waited on indefinitely. It isn't lost —
+  // it drops out of the live table along with the rest of the round when
+  // everything is deleted below, and comes back through the normal
+  // pipeline as its own small round once pickRoundFixtures() picks it up
+  // again (safely, thanks to the archivedIds guard in ensureRoundExists()
+  // above — it can never drag the fixtures archived here back with it).
+  const stillUndecided = freshRows.filter((r) => r.status === "upcoming" && !isFarOutReschedule(r));
   if (stillUndecided.length > 0) return;
 
   const playedRows = freshRows.filter((r) => r.status === "finished");
   const postponedRows = freshRows.filter((r) => r.status === "postponed");
-  // Everything in the round is postponed and nothing has actually been
-  // played yet — extremely rare (e.g. a whole matchday moved for an
-  // international break), but there's nothing real to archive here, so
-  // just leave the round open rather than writing an empty archived entry.
+  const farOutRows = freshRows.filter((r) => r.status === "upcoming" && isFarOutReschedule(r));
+  // Everything in the round is postponed/far-out-rescheduled and nothing
+  // has actually been played yet — extremely rare (e.g. a whole matchday
+  // moved for an international break), but there's nothing real to archive
+  // here, so just leave the round open rather than writing an empty
+  // archived entry.
   if (playedRows.length === 0) return;
 
   const { data: metaRow } = await supabaseAdmin.from("meta").select("*").eq("id", metaId(competition)).maybeSingle();
@@ -472,6 +526,9 @@ async function archiveIfComplete(competition) {
     `${competitionLabel(competition)} round complete — archived ${playedRows.length} fixture(s)` +
       (postponedRows.length
         ? ` (${postponedRows.length} postponed fixture(s) left out of the archive — will resurface once rescheduled)`
+        : "") +
+      (farOutRows.length
+        ? ` (${farOutRows.length} far-out-rescheduled fixture(s) left out of the archive — will resurface closer to their new kickoff)`
         : "") +
       "."
   );
