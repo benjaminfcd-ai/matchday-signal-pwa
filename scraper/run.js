@@ -170,10 +170,25 @@ function stageLabel(stage) {
 // archiveIfComplete()) is the set of fixture ids already sitting inside a
 // PAST archived_rounds snapshot for this competition — see the comment on
 // this parameter in ensureRoundExists() for the resurrection bug it exists
-// to prevent. Defaults to an empty set so every other caller/behavior is
-// unchanged.
-function pickRoundFixtures(competition, seasonFixtures, ref, archivedIds = new Set()) {
-  const upcomingWithMatchday = seasonFixtures.filter((f) => f.status === "upcoming" && f.matchday != null);
+// to prevent.
+// `liveIds` (added alongside it) is the set of fixture ids ALREADY sitting
+// in the live `matches` table for this competition right now — in
+// practice, a postponed row with no new date yet, or a far-out-rescheduled
+// leftover that archiveIfComplete() split off into its own little "round"
+// (see that function's comment). Excluded from `upcomingWithMatchday` below
+// so a leftover's own matchday number — which is always the LOWEST among
+// "upcoming" fixtures once the rest of its round has moved on — can never
+// get reselected as "the next round" and block real advancement. A fixture
+// that's genuinely rescheduled for weeks out (this project's whole reason
+// for separating it from its round in the first place) would otherwise
+// freeze every later matchday from ever being created for the rest of the
+// season. The leftover row itself is untouched by this — it's purely about
+// what counts as "next".
+// Both default to an empty set so every other caller/behavior is unchanged.
+function pickRoundFixtures(competition, seasonFixtures, ref, archivedIds = new Set(), liveIds = new Set()) {
+  const upcomingWithMatchday = seasonFixtures.filter(
+    (f) => f.status === "upcoming" && f.matchday != null && !liveIds.has(f.id)
+  );
 
   if (upcomingWithMatchday.length > 0) {
     const nextMatchday = Math.min(...upcomingWithMatchday.map((f) => f.matchday));
@@ -187,7 +202,7 @@ function pickRoundFixtures(competition, seasonFixtures, ref, archivedIds = new S
   const windowFixtures = seasonFixtures
     .filter((f) => {
       const t = new Date(f.kickoffLocal).getTime();
-      return t >= start.getTime() && t < end.getTime() && !archivedIds.has(f.id);
+      return t >= start.getTime() && t < end.getTime() && !archivedIds.has(f.id) && !liveIds.has(f.id);
     })
     .sort((a, b) => new Date(a.kickoffLocal) - new Date(b.kickoffLocal));
   return { windowFixtures, matchday: null, stage: windowFixtures[0]?.stage || null };
@@ -381,7 +396,24 @@ async function ensureRoundExists(competition, seasonFixtures) {
     .eq("competition", competition);
   if (readErr) throw readErr;
 
-  if (currentRows.length > 0) {
+  // A round only genuinely "exists" here — meaning there's nothing more
+  // for this function to do — when at least one row is a real, normally-
+  // progressing fixture. A row that's only sitting here as a postponed-
+  // with-no-date-yet fixture, or a far-out-rescheduled leftover that
+  // archiveIfComplete() deliberately split off into its own little "round"
+  // (see that function's comment), doesn't count. Without this
+  // distinction, a single far-out reschedule — which can realistically sit
+  // "upcoming" for weeks, exactly what it's FOR — would permanently block
+  // every later round from ever being created: its own matchday number is
+  // always the lowest among "upcoming" fixtures once the rest of its round
+  // has moved on, so pickRoundFixtures() would otherwise keep reselecting
+  // it forever instead of advancing to the next one. (This is exactly what
+  // happened to La Liga after Levante vs Athletic Club was first split off
+  // — Matchday 7 never got created because this check alone couldn't tell
+  // "a round is in progress" apart from "one leftover fixture is parked
+  // here waiting for its own future date".)
+  const hasActiveRound = currentRows.some((r) => r.status === "upcoming" && !isFarOutReschedule(r));
+  if (hasActiveRound) {
     return false; // a round already exists for this competition — nothing to do, whether it's finished or not (archiveIfComplete handles retirement)
   }
 
@@ -407,7 +439,13 @@ async function ensureRoundExists(competition, seasonFixtures) {
   if (archErr) throw archErr;
   const archivedIds = new Set((archivedRows || []).flatMap((r) => (r.matches || []).map((m) => m.id)));
 
-  const { windowFixtures, matchday, stage } = pickRoundFixtures(competition, seasonFixtures, nowIct(), archivedIds);
+  // Every fixture id already sitting LIVE in the matches table for this
+  // competition right now — see the liveIds comment on pickRoundFixtures()
+  // for exactly why this matters (the other half of the fix described in
+  // the hasActiveRound comment above).
+  const liveIds = new Set(currentRows.map((r) => r.id));
+
+  const { windowFixtures, matchday, stage } = pickRoundFixtures(competition, seasonFixtures, nowIct(), archivedIds, liveIds);
   console.log(
     matchday != null
       ? `${competitionLabel(competition)} next round: Matchday ${matchday} (${windowFixtures.length} fixture(s))`
